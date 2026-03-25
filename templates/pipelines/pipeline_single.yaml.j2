@@ -1,0 +1,23 @@
+# =============================================================================
+# Pipeline individual: {{ job_name }}
+#
+# Ejecutar con:
+#   python -m src.main --pipeline config/pipelines/{{ job_name }}.yaml
+#
+# Alternativa de ejecucion directa (sin pipeline):
+#   python -m src.main --job {{ job_name }}
+# =============================================================================
+
+# =========================================================================
+# ZONA DATA ENGINEER — ajustar params si es necesario
+# =========================================================================
+
+name: {{ job_name }}
+description: "Pipeline individual para {{ job_name }}"
+
+jobs:
+  - name: {{ job_name }}
+    # params:           # Opcional: parametros especificos del job (tipos YAML nativos)
+    #   clave: valor    # Se reciben como dict en scrape(driver, web_config, params)
+    #   numero: 42
+    #   activo: true

@@ -1,0 +1,284 @@
+# {{ project_name }}
+
+Proyecto de scraping generado con [ScrapeCraft Generator](https://github.com/seleniumbase/SeleniumBase).
+
+## Requisitos previos
+
+- Python **3.10 o superior**
+- Google Chrome instalado (SeleniumBase gestiona el chromedriver automaticamente)
+
+## Instalacion
+
+**1. Crear y activar el entorno virtual**
+
+```bash
+# Crear
+python -m venv venv
+
+# Activar en Windows
+venv\Scripts\activate
+
+# Activar en macOS / Linux
+source venv/bin/activate
+```
+
+**2. Instalar dependencias**
+
+```bash
+pip install -r requirements.txt
+```
+
+> Todos los comandos deben ejecutarse desde la **raiz del proyecto** (`{{ project_name }}/`) con el entorno virtual activo.
+
+---
+
+## Estructura del proyecto
+
+```
+{{ project_name }}/
+├── src/
+│   ├── main.py                        # CLI dispatcher (framework — no modificar)
+│   ├── shared/                        # Motor ETL (framework — no modificar)
+│   │   ├── job_runner.py
+│   │   ├── storage.py
+│   │   ├── driver_config.py
+│   │   ├── logger.py
+│   │   └── utils.py
+{% for job in jobs %}
+│   ├── {{ job }}/                     # Job: {{ job }} (zona Data Engineer)
+│   │   ├── web_config.yaml            # URL, selectores XPath y waits
+│   │   ├── settings.py                # DRIVER_CONFIG, STORAGE_CONFIG, RAW_CONFIG
+│   │   ├── scraper.py                 # Logica de navegacion y extraccion
+│   │   ├── utils.py                   # parse_record() campo a campo
+│   │   └── process.py                 # Transformaciones y tipado
+{% endfor %}
+{% if consolidado %}
+│   └── consolidadores/
+│       └── consolidador.py            # Logica de consolidacion multi-job
+{% endif %}
+├── config/
+│   ├── global_settings.py             # LOG_CONFIG y DATA_CONFIG (global)
+│   └── pipelines/
+{% if serial and not consolidado %}
+│       └── pipeline.yaml              # Pipeline serial con todos los jobs
+{% elif serial and consolidado %}
+│       └── pipeline_consolidado.yaml  # Pipeline serial con consolidacion
+{% else %}
+{% for job in jobs %}
+│       └── {{ job }}.yaml
+{% endfor %}
+{% endif %}
+├── tests/
+│   ├── test_global.py
+│   ├── test_pipelines.py
+{% for job in jobs %}
+│   └── {{ job }}/
+│       └── test_{{ job }}.py
+{% endfor %}
+├── output/                            # Datos procesados (se crea en ejecucion)
+├── raw/                               # Datos en bruto (se crea en ejecucion)
+└── log/                               # Logs de ejecucion (se crea en ejecucion)
+```
+
+---
+
+## Zona Data Engineer
+
+Cada job tiene 5 archivos a implementar. El framework ya inyecta `url`, `selectors` y `waits` — solo hay que implementar la logica.
+
+### Orden recomendado de implementacion
+
+```
+1. web_config.yaml  → definir URL y selectores XPath
+2. settings.py      → ajustar driver, storage y raw si es necesario
+3. scraper.py       → implementar navegacion y extraccion
+4. utils.py         → implementar parse_record() campo a campo
+5. process.py       → implementar transformaciones y tipado
+```
+
+### `web_config.yaml`
+
+```yaml
+url: "https://www.sitio-objetivo.com/pagina"
+
+selectors:
+  container: '//div[@class="elemento-repetido"]'  # un elemento por registro
+  Campo1:    './/h2'                               # relativo al container
+  Campo2:    './/span[@class="precio"]'
+
+waits:
+  reconnect_attempts: 3
+  after_load: 3        # aumentar para sitios con contenido dinamico (JS/AJAX)
+```
+
+### `scraper.py` — lo que ya provee el framework
+
+```python
+def scrape(driver, web_config, params=None):
+    params    = params or {}
+    url       = web_config["url"]        # <- inyectado por el framework
+    selectors = web_config["selectors"]  # <- inyectado por el framework
+    waits     = web_config["waits"]      # <- inyectado por el framework
+
+    # Implementar aqui: navegacion, captcha, extraccion
+    driver.open(url)
+    items = driver.find_elements(By.XPATH, selectors["container"])
+    datos = [parse_record(item, selectors, i) for i, item in enumerate(items, 1)]
+    return datos
+```
+
+### `utils.py` — extraccion campo a campo
+
+```python
+def parse_record(item, selectors, index):
+    registro = {"Numero": index}
+    for field_name, field_xpath in selectors.items():
+        if field_name == "container":
+            continue
+        registro[field_name] = safe_get_text(item, field_xpath)
+        # Para atributos: safe_get_attr(item, field_xpath, "href")
+    return registro
+```
+
+### `process.py` — transformaciones
+
+```python
+def process(df):
+    df = df.copy()
+    # Todos los campos llegan como str (lineamiento string-first)
+    # Ejemplo: df["Precio"] = df["Precio"].str.replace("€","").astype(float)
+    return df.to_dict(orient="records")
+```
+
+---
+
+## Ejecucion
+
+```bash
+# Ver jobs disponibles
+python -m src.main --list
+
+{% for job in jobs %}
+# Ejecutar job individual
+python -m src.main --job {{ job }}
+
+# Reprocesar raw existente sin volver a scrapear
+python -m src.main --job {{ job }} --reprocess <sufijo_timestamp>
+
+{% endfor %}
+{% if serial and not consolidado %}
+# Ejecutar pipeline serial
+python -m src.main --pipeline config/pipelines/pipeline.yaml
+{% elif serial and consolidado %}
+# Ejecutar pipeline con consolidacion
+python -m src.main --pipeline config/pipelines/pipeline_consolidado.yaml
+{% else %}
+{% for job in jobs %}
+# Ejecutar pipeline individual de {{ job }}
+python -m src.main --pipeline config/pipelines/{{ job }}.yaml
+{% endfor %}
+{% endif %}
+```
+
+El sufijo de `--reprocess` es el timestamp que aparece en el log al finalizar el scraping:
+
+```
+INFO - Raw guardado en raw/{{ jobs[0] }}/{{ jobs[0] }}_20260324_181055.csv
+INFO - Si el proceso falla, puedes reprocesar con: --reprocess 20260324_181055
+```
+
+---
+
+## Tests
+
+**Tests de configuracion** — sin browser, ejecucion rapida:
+
+```bash
+pytest tests/test_global.py tests/test_pipelines.py -v
+```
+
+**Tests por job** — incluyen un test que abre Chrome en modo headless:
+
+```bash
+{% for job in jobs %}
+pytest tests/{{ job }}/ -v -s
+{% endfor %}
+```
+
+**Todos los tests:**
+
+```bash
+pytest tests/ -v -s
+```
+
+> El test `test_driver_instance_created_with_settings_file` abre Chrome en modo headless para verificar que el driver se inicializa correctamente con la configuracion de `settings.py`. Requiere Chrome instalado.
+
+---
+
+## Configuracion
+
+### Global — `config/global_settings.py`
+
+Aplica a todos los jobs. Modificar solo en casos excepcionales (cambio de encoding, separador CSV, etc.).
+
+```python
+LOG_CONFIG  = {"log_folder": "log", "level": "INFO"}
+DATA_CONFIG = {
+    "csv":  {"encoding": "utf-8", "separator": ";", "index": False},
+    "json": {"indent": 2, "force_ascii": False, "orient": "records"},
+    "xml":  {"root": "registros", "row": "registro", "encoding": "utf-8"},
+    "xlsx": {"sheet_name": "Datos", "index": False}
+}
+```
+
+### Por job — `src/<job>/settings.py`
+
+```python
+DRIVER_CONFIG = {
+    "headless":    False,   # True: sin ventana (produccion/servidores)
+    "undetected":  True,    # True: evasion anti-bot (Cloudflare, reCAPTCHA)
+    "maximize":    True,
+    "window_size": None,    # Ej: (1920, 1080)
+    "user_agent":  None,    # Ej: "Mozilla/5.0 ..."
+    "proxy":       None     # Ej: "192.168.1.1:8080"
+}
+
+STORAGE_CONFIG = {
+    "output_folder":  "output/<job>",
+    "filename":       "<job>",
+    "naming_mode":    "date_suffix",   # overwrite | date_suffix | timestamp_suffix | date_folder
+    "output_formats": ["csv", "json"]  # csv | json | xml | xlsx
+}
+
+RAW_CONFIG = {
+    "raw_folder": "raw/<job>",
+    "filename":   "<job>",
+    "format":     "csv",
+    "retention":  {"mode": "keep_last_n", "value": 5}
+    # retention modes: keep_all | keep_last_n | keep_days
+}
+
+SKIP_PROCESS = False  # True: omite process.py, guarda raw como output
+```
+
+#### Modos de nombrado (`naming_mode`)
+
+| Modo | Archivo generado |
+|---|---|
+| `overwrite` | `output/<job>/<job>.csv` — sobreescribe siempre |
+| `date_suffix` | `output/<job>/<job>_20260130.csv` — uno por dia |
+| `timestamp_suffix` | `output/<job>/<job>_20260130_143052.csv` — uno por ejecucion |
+| `date_folder` | `output/<job>/20260130/<job>.csv` — organizado por fecha |
+
+---
+
+## Aviso Legal
+
+Esta herramienta esta destinada exclusivamente para fines educativos. Antes de scrapear cualquier sitio web:
+
+- Revisa y respeta los terminos de servicio del sitio
+- Consulta el archivo `robots.txt`
+- No sobrecargues los servidores con peticiones excesivas
+- Respeta la privacidad y los datos personales
+
+El uso responsable del web scraping es responsabilidad del usuario.

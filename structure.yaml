@@ -1,0 +1,160 @@
+# =============================================================================
+# structure.yaml — Mapa declarativo de todos los archivos del proyecto generado
+# =============================================================================
+#
+# Cada entrada define un archivo a generar. Campos disponibles:
+#
+#   type      (obligatorio):
+#     - static   : copia el archivo de static/<src> a <dst>
+#     - template : renderiza templates/<src> con Jinja2 y escribe en <dst>
+#     - empty    : crea la carpeta y un archivo vacio (para directorios de datos)
+#
+#   src  : ruta relativa a static/ o templates/ segun el type
+#   dst  : ruta de destino relativa a la raiz del proyecto generado
+#          Puede contener {job_name} si repeat: per_job
+#
+#   repeat (opcional, solo templates):
+#     - per_job  : se genera una vez por cada job; {job_name} se reemplaza
+#
+#   condition (opcional):
+#     - serial             : solo si serial=True y consolidado=False
+#     - serial_consolidado : solo si serial=True y consolidado=True
+#     - not_serial         : solo si serial=False
+#
+# Como adaptar cuando cambia la plantilla:
+#   - Nuevo archivo de framework    → agregar entrada type: static + poner el archivo en static/
+#   - Nuevo archivo por job         → agregar entrada type: template, repeat: per_job + crear .j2
+#   - Cambio en contenido framework → editar el archivo en static/
+#   - Cambio en scaffold por job    → editar el .j2 en templates/job/
+#   - Nueva condicion de generacion → agregar condition: <clave> + manejarla en generator.py
+# =============================================================================
+
+files:
+
+  # ---------------------------------------------------------------------------
+  # Archivos de framework — se copian tal cual desde static/
+  # ---------------------------------------------------------------------------
+
+  - type: static
+    src:  src/main.py
+    dst:  src/main.py
+
+  - type: static
+    src:  src/shared/job_runner.py
+    dst:  src/shared/job_runner.py
+
+  - type: static
+    src:  src/shared/storage.py
+    dst:  src/shared/storage.py
+
+  - type: static
+    src:  src/shared/driver_config.py
+    dst:  src/shared/driver_config.py
+
+  - type: static
+    src:  src/shared/logger.py
+    dst:  src/shared/logger.py
+
+  - type: static
+    src:  src/shared/utils.py
+    dst:  src/shared/utils.py
+
+  - type: static
+    src:  config/global_settings.py
+    dst:  config/global_settings.py
+
+  - type: static
+    src:  tests/test_global.py
+    dst:  tests/test_global.py
+
+  - type: static
+    src:  tests/test_pipelines.py
+    dst:  tests/test_pipelines.py
+
+  - type: static
+    src:  requirements.txt
+    dst:  requirements.txt
+
+  - type: static
+    src:  conftest.py
+    dst:  conftest.py
+
+  - type: template
+    src:  README.md.j2
+    dst:  README.md
+
+  # ---------------------------------------------------------------------------
+  # Archivos por job — se generan una vez por cada job (repeat: per_job)
+  # ---------------------------------------------------------------------------
+
+  - type: template
+    src:    job/scraper.py.j2
+    dst:    src/{job_name}/scraper.py
+    repeat: per_job
+
+  - type: template
+    src:    job/utils.py.j2
+    dst:    src/{job_name}/utils.py
+    repeat: per_job
+
+  - type: template
+    src:    job/process.py.j2
+    dst:    src/{job_name}/process.py
+    repeat: per_job
+
+  - type: template
+    src:    job/settings.py.j2
+    dst:    src/{job_name}/settings.py
+    repeat: per_job
+
+  - type: template
+    src:    job/web_config.yaml.j2
+    dst:    src/{job_name}/web_config.yaml
+    repeat: per_job
+
+  - type: template
+    src:    tests/test_job.py.j2
+    dst:    tests/{job_name}/test_{job_name}.py
+    repeat: per_job
+
+  # ---------------------------------------------------------------------------
+  # Pipelines — condicionales segun modo elegido
+  # ---------------------------------------------------------------------------
+
+  - type:      template
+    src:       pipelines/pipeline_serial.yaml.j2
+    dst:       config/pipelines/pipeline.yaml
+    condition: serial
+
+  - type:      template
+    src:       pipelines/pipeline_serial_consolidado.yaml.j2
+    dst:       config/pipelines/pipeline_consolidado.yaml
+    condition: serial_consolidado
+
+  - type:      template
+    src:       pipelines/pipeline_single.yaml.j2
+    dst:       config/pipelines/{job_name}.yaml
+    repeat:    per_job
+    condition: not_serial
+
+  # ---------------------------------------------------------------------------
+  # Consolidador — solo si se eligio serial con consolidacion
+  # ---------------------------------------------------------------------------
+
+  - type:      template
+    src:       consolidadores/consolidador.py.j2
+    dst:       src/consolidadores/consolidador.py
+    condition: serial_consolidado
+
+  # ---------------------------------------------------------------------------
+  # Carpetas de datos — se crean vacias con .gitkeep
+  # ---------------------------------------------------------------------------
+
+  - type: empty
+    dst:  output/.gitkeep
+
+  - type: empty
+    dst:  raw/.gitkeep
+
+  - type: empty
+    dst:  log/.gitkeep

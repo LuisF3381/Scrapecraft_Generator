@@ -1,0 +1,58 @@
+import logging
+import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+# =========================================================================
+# ZONA DATA ENGINEER — constantes de apoyo y logica de transformacion
+# =========================================================================
+
+# TODO: definir constantes de apoyo si las necesitas
+# Ejemplo — mapa de valores textuales a numericos:
+#   _ESTADO_MAP = {
+#       "Disponible": 1,
+#       "Agotado":    0,
+#   }
+
+
+def process(df: pd.DataFrame) -> list[dict]:
+    """
+    Aplica transformaciones a los datos raw de {{ job_name }}.
+
+    Recibe el DataFrame con TODOS los campos como strings (string-first).
+    Retorna una lista de diccionarios con los tipos correctos ya aplicados.
+
+    Args:
+        df: DataFrame con los datos raw (todas las columnas son strings)
+
+    Returns:
+        list[dict]: Lista de diccionarios con los datos procesados y tipados
+    """
+    df = df.copy()
+
+    # TODO: implementar transformaciones de limpieza y tipado
+    #
+    # Limpiar espacios en columnas de texto:
+    #   for col in df.select_dtypes(include=["object"]).columns:
+    #       df[col] = df[col].str.strip()
+    #
+    # Convertir precio a float: "$ 1.250,99" → 1250.99
+    #   df["Precio_num"] = (
+    #       df["Precio"]
+    #       .str.replace(r"[^\d,\.]", "", regex=True)
+    #       .str.replace(",", ".")
+    #       .astype(float)
+    #   )
+    #
+    # Convertir a entero:
+    #   df["Cantidad"] = df["Cantidad"].astype(int)
+    #
+    # Convertir a fecha:
+    #   df["Fecha"] = pd.to_datetime(df["Fecha"], format="%d/%m/%Y")
+
+    logger.info(f"Procesamiento completado: {len(df)} registros")
+
+    # =========================================================================
+    # FIN ZONA DATA ENGINEER
+    # =========================================================================
+    return df.to_dict(orient="records")

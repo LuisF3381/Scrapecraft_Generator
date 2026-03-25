@@ -1,0 +1,44 @@
+from src.shared.utils import safe_get_text, safe_get_attr
+
+
+def parse_record(item, selectors: dict, index: int) -> dict:
+    """
+    Construye el diccionario de un registro para {{ job_name }}.
+
+    Recibe un WebElement (el contenedor de un registro) y extrae cada campo
+    usando los selectores definidos en web_config.yaml.
+
+    Args:
+        item:      WebElement del contenedor (un elemento de la lista scrapeada)
+        selectors: Diccionario {nombre_campo: xpath} del web_config.yaml
+        index:     Numero de registro (se guarda como campo "Numero")
+
+    Returns:
+        dict con todos los campos extraidos como strings
+    """
+    # =========================================================================
+    # ZONA DATA ENGINEER — implementar extraccion campo a campo
+    # =========================================================================
+    registro: dict = {"Numero": index}
+
+    # TODO: extraer cada campo usando safe_get_text() o safe_get_attr()
+    #
+    # Patron recomendado — iterar sobre los selectores del web_config:
+    #   for field_name, field_xpath in selectors.items():
+    #       if field_name == "container":
+    #           continue
+    #       registro[field_name] = safe_get_text(item, field_xpath)
+    #
+    # Para extraer atributos HTML (href, class, title, src, data-*...):
+    #       registro[field_name] = safe_get_attr(item, field_xpath, "href")
+    #
+    # Para logica especifica por campo:
+    #   if field_name == "Precio":
+    #       registro[field_name] = safe_get_text(item, field_xpath)
+    #   elif field_name == "Enlace":
+    #       registro[field_name] = safe_get_attr(item, field_xpath, "href")
+
+    return registro
+    # =========================================================================
+    # FIN ZONA DATA ENGINEER
+    # =========================================================================

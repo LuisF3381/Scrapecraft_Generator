@@ -1,0 +1,56 @@
+import logging
+import time
+from selenium.webdriver.common.by import By
+from seleniumbase import Driver
+from src.{{ job_name }}.utils import parse_record
+
+logger = logging.getLogger(__name__)
+
+
+def scrape(driver: Driver, web_config: dict, params: dict = None) -> list[dict]:
+    """
+    Extrae datos de {{ job_name }}.
+
+    Args:
+        driver:     Instancia del driver de SeleniumBase
+        web_config: Diccionario con url, selectors y waits cargado de web_config.yaml
+        params:     Parametros opcionales pasados por CLI o pipeline YAML
+
+    Returns:
+        list[dict]: Lista de diccionarios con los datos extraidos (campos como strings)
+    """
+    # =========================================================================
+    # ZONA DATA ENGINEER — implementar logica de navegacion y extraccion
+    # =========================================================================
+    params = params or {}
+    url: str        = web_config["url"]
+    selectors: dict = web_config["selectors"]
+    waits: dict     = web_config["waits"]
+
+    # TODO: implementar navegacion y carga de la pagina
+    #
+    # Sitio sin proteccion anti-bot:
+    #   driver.open(url)
+    #   logger.info("Pagina cargada correctamente")
+    #   time.sleep(waits["after_load"])
+    #
+    # Sitio con anti-bot (requiere undetected=True en settings.py):
+    #   driver.uc_open_with_reconnect(url, waits["reconnect_attempts"])
+    #   driver.uc_gui_handle_captcha()
+    #   time.sleep(waits["after_load"])
+
+    # TODO: encontrar los elementos contenedor (uno por registro)
+    #   items = driver.find_elements(By.XPATH, selectors["container"])
+    #   logger.info(f"Encontrados {len(items)} registros")
+
+    # TODO: construir la lista de registros usando parse_record()
+    #   datos: list[dict] = [
+    #       parse_record(item, selectors, index)
+    #       for index, item in enumerate(items, start=1)
+    #   ]
+
+    datos: list[dict] = []
+    return datos
+    # =========================================================================
+    # FIN ZONA DATA ENGINEER
+    # =========================================================================

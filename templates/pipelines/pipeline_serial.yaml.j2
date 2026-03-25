@@ -1,0 +1,33 @@
+# =============================================================================
+# Pipeline: ejecucion serial — todos los jobs en secuencia
+#
+# Ejecutar con:
+#   python -m src.main --pipeline config/pipelines/pipeline.yaml
+#
+# Si un job falla, el siguiente se ejecuta igualmente.
+# Al finalizar se muestra un resumen con los jobs exitosos y fallidos.
+# =============================================================================
+
+# =========================================================================
+# ZONA DATA ENGINEER — ajustar params por job si es necesario
+# =========================================================================
+
+name: {{ project_name }}
+description: "Pipeline serial de {{ project_name }}"
+
+jobs:
+{% for job in jobs %}
+  - name: {{ job }}
+    # params:           # Opcional: parametros especificos del job (tipos YAML nativos)
+    #   clave: valor    # Se reciben como dict en scrape(driver, web_config, params)
+    #   numero: 42
+    #   activo: true
+{% endfor %}
+# Consolidacion desactivada. Para activarla:
+#   1. Crea src/consolidadores/mi_consolidador.py
+#   2. Descomenta el bloque y ajusta el modulo y formato
+# consolidate:
+#   enabled: true
+#   module: mi_consolidador   # src/consolidadores/mi_consolidador.py
+#   format: csv               # todos los jobs deben incluir este formato en output_formats
+#   params: {}

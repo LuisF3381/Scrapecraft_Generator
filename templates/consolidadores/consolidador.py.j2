@@ -1,0 +1,80 @@
+# =============================================================================
+# Consolidador de {{ project_name }}
+#
+# Combina los outputs de todos los jobs del pipeline en un unico dataset.
+# Se activa desde el pipeline YAML con el bloque 'consolidate'.
+#
+# Restriccion: todos los jobs del pipeline deben incluir el formato definido
+# en consolidate.format dentro de su STORAGE_CONFIG['output_formats'].
+# =============================================================================
+
+import pandas as pd
+
+# =========================================================================
+# ZONA DATA ENGINEER (1/2) — configurar almacenamiento del consolidado
+# =========================================================================
+
+STORAGE_CONFIG = {
+    # Carpeta donde se guarda el archivo consolidado
+    "output_folder": "output/consolidados",
+
+    # Nombre base del archivo consolidado (sin extension)
+    "filename": "consolidado",
+
+    # Modo de nombrado: overwrite | date_suffix | timestamp_suffix | date_folder
+    "naming_mode": "date_suffix",
+
+    # Formatos en los que se guarda el consolidado
+    "output_formats": ["csv"],
+}
+
+# =========================================================================
+# FIN ZONA DATA ENGINEER (1/2)
+# =========================================================================
+
+
+def consolidate(job_dataframes: dict[str, pd.DataFrame], params: dict = None) -> list[dict]:
+    """
+    Combina los outputs de los jobs del pipeline en un unico dataset.
+
+    El framework carga automaticamente los archivos de cada job y los entrega
+    como DataFrames listos para usar. Solo implementa la logica de combinacion.
+
+    Args:
+        job_dataframes: Mapa de job_name -> DataFrame con los datos del job.
+                        Jobs disponibles en este pipeline:
+{% for job in jobs %}
+                          - "{{ job }}"
+{% endfor %}
+        params:         Parametros opcionales definidos en consolidate.params
+                        del pipeline YAML.
+
+    Returns:
+        list[dict]: Datos consolidados. Cada dict es un registro del output final.
+    """
+    # =========================================================================
+    # ZONA DATA ENGINEER (2/2) — implementar logica de consolidacion
+    # =========================================================================
+    params = params or {}
+
+    # TODO: desempaquetar los DataFrames de cada job
+{% for job in jobs %}
+    # {{ job }}_df = job_dataframes["{{ job }}"]
+{% endfor %}
+
+    # TODO: implementar la logica de consolidacion
+    #
+    # Ejemplo — concatenar todos los jobs con una columna que identifica la fuente:
+{% for job in jobs %}
+    # {{ job }}_df["_fuente"] = "{{ job }}"
+{% endfor %}
+    # consolidado = pd.concat(
+    #     [{% for job in jobs %}{{ job }}_df{% if not loop.last %}, {% endif %}{% endfor %}],
+    #     ignore_index=True
+    # )
+    # return consolidado.to_dict(orient="records")
+
+    # =========================================================================
+    # FIN ZONA DATA ENGINEER (2/2)
+    # =========================================================================
+    return []

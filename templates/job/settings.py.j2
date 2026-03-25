@@ -1,0 +1,87 @@
+"""
+Configuracion especifica del job {{ job_name }}.
+Para configuracion global (logs, formatos de datos) ver config/global_settings.py
+"""
+# =========================================================================
+# ZONA DATA ENGINEER — configurar todos los bloques de este archivo
+# =========================================================================
+
+# ============================================
+# CONFIGURACION DEL DRIVER
+# ============================================
+
+DRIVER_CONFIG = {
+    # Modo headless: True para ejecutar sin interfaz grafica (produccion/servidores)
+    "headless": False,
+
+    # Undetected mode: True para sitios con anti-bot (Cloudflare, reCAPTCHA, etc.)
+    "undetected": True,
+
+    # Maximizar ventana automaticamente al iniciar
+    "maximize": True,
+
+    # Tamano de ventana fijo: tupla (ancho, alto). None usa el tamano por defecto.
+    # Ejemplo: (1920, 1080). Si se define, ignora "maximize".
+    "window_size": None,
+
+    # User agent personalizado. None usa el del navegador por defecto.
+    "user_agent": None,
+
+    # Proxy en formato "ip:puerto". None sin proxy.
+    "proxy": None
+}
+
+# ============================================
+# CONFIGURACION DE ALMACENAMIENTO
+# ============================================
+
+STORAGE_CONFIG = {
+    # Carpeta de salida (relativa a la raiz del proyecto)
+    "output_folder": "output/{{ job_name }}",
+
+    # Nombre base del archivo (sin extension)
+    "filename": "{{ job_name }}",
+
+    # Modo de nombrado del archivo de salida:
+    # - "overwrite":        Sobrescribe el archivo en cada ejecucion ({{ job_name }}.csv)
+    # - "date_suffix":      Anade fecha al nombre ({{ job_name }}_20260130.csv)
+    # - "timestamp_suffix": Anade fecha y hora ({{ job_name }}_20260130_143052.csv)
+    # - "date_folder":      Crea subcarpeta con fecha (20260130/{{ job_name }}.csv)
+    "naming_mode": "date_suffix",
+
+    # Formatos de salida: lista de formatos a exportar
+    # Opciones disponibles: "csv", "json", "xml", "xlsx"
+    "output_formats": ["csv", "json"]
+}
+
+# ============================================
+# CONFIGURACION DEL PIPELINE
+# ============================================
+
+# Si es True, omite process.py y guarda el raw directamente como output final.
+# Util para casos donde los datos no necesitan transformacion.
+SKIP_PROCESS = False
+
+# ============================================
+# CONFIGURACION DE RAW (datos en bruto)
+# ============================================
+
+RAW_CONFIG = {
+    # Carpeta donde se guardan los archivos raw (relativa a la raiz del proyecto)
+    "raw_folder": "raw/{{ job_name }}",
+
+    # Nombre base del archivo raw (sin extension ni sufijo timestamp)
+    "filename": "{{ job_name }}",
+
+    # Formato del archivo raw: csv | json | xml | xlsx
+    "format": "csv",
+
+    # Politica de retencion de archivos raw:
+    # - "keep_all":    Conserva todos los archivos raw
+    # - "keep_last_n": Conserva los ultimos N archivos (requiere "value": N)
+    # - "keep_days":   Conserva los archivos de los ultimos N dias (requiere "value": N)
+    "retention": {
+        "mode": "keep_last_n",
+        "value": 5
+    }
+}

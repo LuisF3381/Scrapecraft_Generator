@@ -1,0 +1,44 @@
+# =========================================================================
+# ZONA DATA ENGINEER — configurar url, selectors y waits
+# =========================================================================
+
+# =============================================================================
+# URL de la pagina a scrapear
+# =============================================================================
+url: ""    # TODO: reemplazar con la URL objetivo (ej: "https://www.ejemplo.com/productos")
+
+# =============================================================================
+# Selectores XPath
+#
+# - container: OBLIGATORIO. XPath absoluto al elemento que se repite una vez
+#              por registro (ej: tarjeta de producto, fila de tabla, anuncio).
+#              Es la palabra reservada del sistema — no renombrar.
+#
+# - Resto de campos: XPath RELATIVO al container (debe empezar con .//).
+#                    El nombre del campo se convierte en columna del output.
+#                    Si el elemento no existe en un registro, se guarda "".
+#
+# Ejemplos de selectores comunes:
+#   container: '//div[@class="product-card"]'
+#   Titulo:    './/h2[@class="title"]'
+#   Precio:    './/span[contains(@class,"price")]'
+#   Enlace:    './/a'                        <- usar safe_get_attr con "href"
+#   Imagen:    './/img'                      <- usar safe_get_attr con "src"
+# =============================================================================
+selectors:
+  container: ""   # TODO: XPath del elemento contenedor
+  # Campo1: './/xpath/del/campo1'
+  # Campo2: './/xpath/del/campo2'
+
+# =============================================================================
+# Tiempos de espera
+#
+# - reconnect_attempts: Intentos de reconexion si la pagina no carga correctamente.
+#                       Usar con driver.uc_open_with_reconnect() en scraper.py.
+#
+# - after_load: Segundos de espera tras la carga de la pagina.
+#               Aumentar para sitios con contenido cargado dinamicamente (JS/AJAX).
+# =============================================================================
+waits:
+  reconnect_attempts: 3
+  after_load: 3

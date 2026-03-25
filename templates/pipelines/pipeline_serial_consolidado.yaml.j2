@@ -1,0 +1,33 @@
+# =============================================================================
+# Pipeline: ejecucion serial con consolidacion final
+#
+# Ejecutar con:
+#   python -m src.main --pipeline config/pipelines/pipeline_consolidado.yaml
+#
+# Flujo:
+{% for job in jobs %}
+#   {{ loop.index }}. Ejecuta {{ job }} → output/{{ job }}/
+{% endfor %}
+#   {{ jobs | length + 1 }}. Si TODOS los jobs son exitosos → consolida en output/consolidados/
+#
+# Nota: la consolidacion se omite si alguno de los jobs falla.
+# =============================================================================
+
+# =========================================================================
+# ZONA DATA ENGINEER — ajustar params y configuracion de consolidacion
+# =========================================================================
+
+name: {{ project_name }}_consolidado
+description: "Pipeline serial con consolidacion de {{ project_name }}"
+
+jobs:
+{% for job in jobs %}
+  - name: {{ job }}
+    # params:           # Opcional: parametros especificos del job (tipos YAML nativos)
+    #   clave: valor
+{% endfor %}
+consolidate:
+  enabled: true
+  module: consolidador        # src/consolidadores/consolidador.py
+  format: csv                 # todos los jobs deben incluir "csv" en output_formats
+  params: {}                  # Opcional: parametros adicionales para el consolidador
