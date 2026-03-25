@@ -45,12 +45,13 @@ pip install -r requirements.txt
 │   │   ├── logger.py
 │   │   └── utils.py
 {% for job in jobs %}
-│   ├── {{ job }}/                     # Job: {{ job }} (zona Data Engineer)
+│   ├── {{ job }}/                     # Job: {{ job }}
 │   │   ├── web_config.yaml            # URL, selectores XPath y waits
 │   │   ├── settings.py                # DRIVER_CONFIG, STORAGE_CONFIG, RAW_CONFIG
-│   │   ├── scraper.py                 # Logica de navegacion y extraccion
-│   │   ├── utils.py                   # parse_record() campo a campo
-│   │   └── process.py                 # Transformaciones y tipado
+│   │   ├── scraper.py                 # Logica de navegacion y extraccion (Data Engineer)
+│   │   ├── utils.py                   # parse_record() campo a campo (Data Engineer)
+│   │   ├── process.py                 # Transformaciones y tipado (Data Engineer)
+│   │   └── validate.py                # Validaciones de calidad (Gobierno de Datos)
 {% endfor %}
 {% if consolidado %}
 │   └── consolidadores/
@@ -77,14 +78,15 @@ pip install -r requirements.txt
 {% endfor %}
 ├── output/                            # Datos procesados (se crea en ejecucion)
 ├── raw/                               # Datos en bruto (se crea en ejecucion)
-└── log/                               # Logs de ejecucion (se crea en ejecucion)
+├── log/                               # Logs de ejecucion (se crea en ejecucion)
+└── latest/                            # Ultima ejecucion con rutas fijas (se crea en ejecucion)
 ```
 
 ---
 
 ## Zona Data Engineer
 
-Cada job tiene 5 archivos a implementar. El framework ya inyecta `url`, `selectors` y `waits` — solo hay que implementar la logica.
+Cada job tiene archivos de implementacion en dos capas independientes.
 
 ### Orden recomendado de implementacion
 
@@ -94,6 +96,7 @@ Cada job tiene 5 archivos a implementar. El framework ya inyecta `url`, `selecto
 3. scraper.py       → implementar navegacion y extraccion
 4. utils.py         → implementar parse_record() campo a campo
 5. process.py       → implementar transformaciones y tipado
+6. validate.py      → implementar validaciones de calidad (Gobierno de Datos)
 ```
 
 ### `web_config.yaml`
@@ -152,6 +155,43 @@ def process(df):
 
 ---
 
+## Zona Gobierno de Datos
+
+### `validate.py` — validaciones de calidad
+
+El framework ejecuta `validate()` automaticamente despues de `process()` y antes de guardar el output. Si retorna errores, el job falla y no se guarda ningun archivo.
+
+```python
+def validate(df: pd.DataFrame) -> list[str]:
+    errors: list[str] = []
+
+    # =========================================================================
+    # ZONA GOBIERNO DE DATOS
+    # =========================================================================
+
+    # Ejemplo: verificar que no hay registros vacios en columnas criticas
+    # if df["Precio"].eq("").any():
+    #     errors.append("Hay registros con Precio vacio")
+
+    # Ejemplo: verificar rango de valores
+    # precios = pd.to_numeric(df["Precio"], errors="coerce")
+    # if precios.isna().any():
+    #     errors.append(f"{precios.isna().sum()} registros con Precio no numerico")
+
+    # =========================================================================
+    # FIN ZONA GOBIERNO DE DATOS
+    # =========================================================================
+
+    return errors
+```
+
+**Reglas de implementacion:**
+- Solo lectura — no modificar el DataFrame
+- Cada error es un string descriptivo con contexto suficiente para diagnosticar
+- Lista vacia = validacion exitosa
+
+---
+
 ## Ejecucion
 
 ```bash
@@ -185,6 +225,19 @@ El sufijo de `--reprocess` es el timestamp que aparece en el log al finalizar el
 ```
 INFO - Raw guardado en raw/{{ jobs[0] }}/{{ jobs[0] }}_20260324_181055.csv
 INFO - Si el proceso falla, puedes reprocesar con: --reprocess 20260324_181055
+```
+
+### Carpeta `latest/`
+
+Despues de cada ejecucion exitosa, el framework copia el output y el log en `latest/<job>/` con nombres fijos (sin timestamp). Esto permite que procesos externos consuman siempre la misma ruta independientemente del `naming_mode`.
+
+```
+latest/
+{% for job in jobs %}
+└── {{ job }}/
+    ├── {{ job }}.csv     # output con nombre fijo (formato segun output_formats)
+    └── run.log           # log de la ultima ejecucion
+{% endfor %}
 ```
 
 ---

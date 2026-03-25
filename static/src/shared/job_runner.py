@@ -5,8 +5,9 @@ import yaml
 from datetime import datetime
 from pathlib import Path
 from src.shared.driver_config import create_driver
+from src.shared import logger as logger_module
 from src.shared.logger import setup_logger
-from src.shared.storage import save_data, save_raw, cleanup_raw, load_raw  # load_raw solo para --reprocess
+from src.shared.storage import save_data, save_raw, cleanup_raw, load_raw, clear_latest, copy_to_latest
 from config import global_settings
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 #                         → save_raw()
 #                         → process()   → [process.py]   <- implementar aqui
 #                         → cleanup_raw()
+#           → _run_validate()           → [validate.py]  <- implementar aqui (gobierno de datos)
 #           → _save_output()
 #
 #   FLUJO SIN PROCESS (SKIP_PROCESS=True en settings.py):
@@ -26,13 +28,16 @@ logger = logging.getLogger(__name__)
 #                         → save_raw()
 #                         → load_raw()
 #                         → cleanup_raw()
+#           → _run_validate()
 #           → _save_output()
 #
 #   FLUJO REPROCESS (--reprocess <sufijo>):
 #     run() → _run_reprocess() → process()  → [process.py]
+#           → _run_validate()              → [validate.py]
 #           → _save_output()
 #
 #   Como data engineer solo debes implementar scraper.py y process.py.
+#   Como gobierno de datos solo debes implementar validate.py.
 #   app_job.py no requiere modificaciones: solo declara los imports del job.
 # ---------------------------------------------------------------------------
 
@@ -107,6 +112,23 @@ def _run_full(scrape_fn, process_fn, settings, job_name: str, now: datetime, par
     return processed
 
 
+def _run_validate(validate_fn, processed: list[dict]) -> None:
+    """Ejecuta validate() sobre los datos procesados y lanza ValueError si hay errores.
+
+    Args:
+        validate_fn: Funcion validate() del job.
+        processed:   Datos procesados (list[dict]) retornados por process() o _run_full().
+    """
+    logger.info("Ejecutando validaciones...")
+    errors = validate_fn(pd.DataFrame(processed))
+    if errors:
+        errors_str = "\n  - ".join(errors)
+        raise ValueError(
+            f"Validacion fallida ({len(errors)} error(es)):\n  - {errors_str}"
+        )
+    logger.info("Validacion exitosa")
+
+
 def _run_reprocess(suffix: str, process_fn, settings) -> list[dict]:
     """Flujo reprocess: omite el scraping y reprocesa un raw existente."""
     logger.info(f"Iniciando reprocesamiento: sufijo {suffix}")
@@ -136,23 +158,29 @@ def _save_output(processed: list[dict], settings, now: datetime) -> dict[str, Pa
 # Punto de entrada generico (llamado desde app_job.py de cada job)
 # ---------------------------------------------------------------------------
 
-def run(args: argparse.Namespace, scrape_fn, process_fn, settings, job_name: str, params: dict | None = None) -> dict[str, Path]:
+def run(args: argparse.Namespace, scrape_fn, process_fn, validate_fn, settings, job_name: str, params: dict | None = None, update_latest: bool = True) -> dict[str, Path]:
     """
     Punto de entrada generico para cualquier job.
 
     Args:
-        args:       Argumentos CLI (args.reprocess: str | None)
-        scrape_fn:  Funcion scrape() del job
-        process_fn: Funcion process() del job
-        settings:   Modulo de configuracion del job
-        job_name:   Nombre del job (nombre de la carpeta en src/)
-        params:     Parametros del job definidos en el pipeline YAML (dict nativo)
+        args:           Argumentos CLI (args.reprocess: str | None)
+        scrape_fn:      Funcion scrape() del job
+        process_fn:     Funcion process() del job
+        validate_fn:    Funcion validate() del job (gobierno de datos)
+        settings:       Modulo de configuracion del job
+        job_name:       Nombre del job (nombre de la carpeta en src/)
+        params:         Parametros del job definidos en el pipeline YAML (dict nativo)
+        update_latest:  Si True, gestiona latest/<job_name>/ al inicio y al final.
+                        Pasar False cuando el pipeline consolidado gestiona su propio latest.
 
     Returns:
         dict[str, Path]: Mapa de formato -> ruta del archivo guardado (ej: {"csv": Path(...)}).
     """
     now = datetime.now()
     setup_logger(job_name, now, **global_settings.LOG_CONFIG)
+
+    if update_latest:
+        clear_latest(job_name)
 
     params = params or {}
 
@@ -163,6 +191,7 @@ def run(args: argparse.Namespace, scrape_fn, process_fn, settings, job_name: str
         else:
             processed = _run_full(scrape_fn, process_fn, settings, job_name, now, params)
 
+        _run_validate(validate_fn, processed)
         output_paths = _save_output(processed, settings, now)
 
     except Exception as e:
@@ -174,5 +203,10 @@ def run(args: argparse.Namespace, scrape_fn, process_fn, settings, job_name: str
         # se aplique aunque el job falle. En --reprocess no hay raw nuevo que gestionar.
         if not args.reprocess:
             cleanup_raw(settings.RAW_CONFIG)
+
+        if update_latest:
+            logger_module.flush_log()
+            base_filename = settings.STORAGE_CONFIG.get("filename")
+            copy_to_latest(job_name, output_paths, logger_module.current_log_path, base_filename)
 
     return output_paths

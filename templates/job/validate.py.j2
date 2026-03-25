@@ -1,0 +1,30 @@
+import logging
+import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+
+def validate(df: pd.DataFrame) -> list[str]:
+    """
+    Valida el DataFrame procesado antes de guardarlo.
+    Solo lectura — no modificar el DataFrame.
+    Retorna una lista de errores encontrados.
+    Lista vacia significa que la validacion fue exitosa.
+
+    Args:
+        df: DataFrame con los datos procesados por process()
+
+    Returns:
+        list[str]: Lista de mensajes de error. Vacia si la validacion es exitosa.
+    """
+    errors: list[str] = []
+
+    # =========================================================================
+    # ZONA GOBIERNO DE DATOS
+    # =========================================================================
+
+    # =========================================================================
+    # FIN ZONA GOBIERNO DE DATOS
+    # =========================================================================
+
+    return errors

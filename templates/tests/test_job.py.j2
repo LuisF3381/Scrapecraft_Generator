@@ -1,6 +1,7 @@
 import pytest
 import os
 import re
+import importlib
 from urllib.parse import urlparse
 from src.shared.driver_config import create_driver
 from src.shared.job_runner import load_web_config as _load_web_config
@@ -163,6 +164,42 @@ class TestRawConfig:
         mode = settings.RAW_CONFIG["retention"]["mode"]
         assert mode in valid_modes, f"Modo invalido: {mode}. Debe ser uno de {valid_modes}"
         print(f"[OK] Modo de retencion valido: {mode}")
+
+
+class TestValidateConfig:
+    """Tests para validar la existencia y firma de validate.py de {{ job_name }}"""
+
+    def test_validate_file_exists(self):
+        """Verifica que existe el archivo validate.py."""
+        assert os.path.exists("src/{{ job_name }}/validate.py"), \
+            "No existe src/{{ job_name }}/validate.py"
+        print("[OK] src/{{ job_name }}/validate.py existe")
+
+    def test_validate_module_imports(self):
+        """Verifica que validate.py se puede importar sin errores."""
+        try:
+            validate_mod = importlib.import_module("src.{{ job_name }}.validate")
+        except ImportError as e:
+            pytest.fail(f"No se pudo importar src.{{ job_name }}.validate: {e}")
+        print("[OK] src.{{ job_name }}.validate importado correctamente")
+
+    def test_validate_function_exists(self):
+        """Verifica que validate.py expone la funcion validate()."""
+        validate_mod = importlib.import_module("src.{{ job_name }}.validate")
+        assert hasattr(validate_mod, "validate"), \
+            "src/{{ job_name }}/validate.py no define la funcion validate()"
+        assert callable(validate_mod.validate), \
+            "validate en src/{{ job_name }}/validate.py no es callable"
+        print("[OK] Funcion validate() presente y callable")
+
+    def test_validate_returns_list_on_empty_df(self):
+        """Verifica que validate() retorna una lista al recibir un DataFrame vacio."""
+        import pandas as pd
+        validate_mod = importlib.import_module("src.{{ job_name }}.validate")
+        result = validate_mod.validate(pd.DataFrame())
+        assert isinstance(result, list), \
+            f"validate() debe retornar list, retorno {type(result)}"
+        print("[OK] validate() retorna list con DataFrame vacio")
 
 
 if __name__ == "__main__":

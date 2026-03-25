@@ -113,6 +113,11 @@ files:
     repeat: per_job
 
   - type: template
+    src:    job/validate.py.j2
+    dst:    src/{job_name}/validate.py
+    repeat: per_job
+
+  - type: template
     src:    tests/test_job.py.j2
     dst:    tests/{job_name}/test_{job_name}.py
     repeat: per_job
@@ -158,3 +163,6 @@ files:
 
   - type: empty
     dst:  log/.gitkeep
+
+  - type: empty
+    dst:  latest/.gitkeep

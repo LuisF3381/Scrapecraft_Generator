@@ -1,6 +1,10 @@
 import logging
 import os
 from datetime import datetime
+from pathlib import Path
+
+
+current_log_path: Path | None = None
 
 
 def setup_logger(job_name: str, now: datetime, log_folder: str = "log", level: str = "INFO") -> None:
@@ -15,9 +19,12 @@ def setup_logger(job_name: str, now: datetime, log_folder: str = "log", level: s
         log_folder: Carpeta donde se guardan los logs
         level:      Nivel de logging (DEBUG, INFO, WARNING, ERROR)
     """
+    global current_log_path
+
     os.makedirs(log_folder, exist_ok=True)
 
     log_file: str = os.path.join(log_folder, f"{job_name}_{now:%Y%m%d_%H%M%S}.log")
+    current_log_path = Path(log_file)
 
     logger: logging.Logger = logging.getLogger("src")
     logger.setLevel(getattr(logging, level.upper()))
@@ -37,3 +44,9 @@ def setup_logger(job_name: str, now: datetime, log_folder: str = "log", level: s
 
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
+
+
+def flush_log() -> None:
+    """Vacia los buffers de todos los handlers del logger 'src'."""
+    for handler in logging.getLogger("src").handlers:
+        handler.flush()

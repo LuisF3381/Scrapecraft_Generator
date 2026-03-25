@@ -1,4 +1,5 @@
 import logging
+import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -240,3 +241,59 @@ def cleanup_raw(raw_config: dict) -> None:
             logger.info(f"Raw eliminado: {filepath}")
         except OSError as e:
             logger.warning(f"No se pudo eliminar el raw {filepath}: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Gestion de latest/
+# ---------------------------------------------------------------------------
+
+
+def clear_latest(folder: str) -> None:
+    """Elimina y recrea latest/<folder>/ para la proxima ejecucion."""
+    latest_path = Path("latest") / folder
+    if latest_path.exists():
+        shutil.rmtree(latest_path)
+    latest_path.mkdir(parents=True)
+
+
+def copy_to_latest(folder: str, output_paths: dict, log_path, base_filename: str | None = None) -> None:
+    """
+    Copia los outputs y el log de la ejecucion en latest/<folder>/.
+
+    Args:
+        folder:        Nombre de la carpeta dentro de latest/ (job_name o pipeline_name).
+        output_paths:  Mapa formato -> Path del archivo generado.
+        log_path:      Path del archivo de log (o None si no aplica).
+        base_filename: Nombre base para el archivo en latest/ (sin extension).
+                       Si es None se usa el nombre original del archivo.
+    """
+    latest_path = Path("latest") / folder
+    latest_path.mkdir(parents=True, exist_ok=True)
+    for fmt, filepath in output_paths.items():
+        if filepath.exists():
+            dest_name = f"{base_filename}.{fmt}" if base_filename else filepath.name
+            shutil.copy2(filepath, latest_path / dest_name)
+    if log_path and log_path.exists():
+        shutil.copy2(log_path, latest_path / "run.log")
+
+
+def merge_logs_to_latest(folder: str, log_paths: list) -> None:
+    """
+    Concatena multiples logs de jobs en un unico latest/<folder>/run.log.
+    Usado por pipelines consolidados para reunir todos los logs de jobs.
+
+    Args:
+        folder:    Nombre de la carpeta dentro de latest/.
+        log_paths: Lista de Path de archivos de log a concatenar.
+    """
+    latest_path = Path("latest") / folder
+    latest_path.mkdir(parents=True, exist_ok=True)
+    merged_log = latest_path / "run.log"
+    with open(merged_log, "w", encoding="utf-8") as out:
+        for log_path in log_paths:
+            if log_path and log_path.exists():
+                out.write(f"{'='*60}\n")
+                out.write(f"LOG: {log_path.name}\n")
+                out.write(f"{'='*60}\n")
+                out.write(log_path.read_text(encoding="utf-8"))
+                out.write("\n")
