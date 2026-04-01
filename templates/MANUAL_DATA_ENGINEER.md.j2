@@ -228,6 +228,20 @@ python -m src.main --pipeline config/pipelines/{{ "pipeline_consolidado.yaml" if
 # Correr los tests de configuracion
 python -m pytest tests/ -v
 ```
+{% if serial and jobs | length > 1 %}
+
+### Modo paralelo
+
+El pipeline puede ejecutar todos los jobs simultaneamente activando `parallel: true` en el YAML del pipeline. Cada job escribe en su propio log gracias al sistema de logging thread-safe.
+
+```yaml
+# config/pipelines/{{ "pipeline_consolidado.yaml" if consolidado else "pipeline.yaml" }}
+parallel: true{% if parallel %}   # ya activado{% endif %}
+
+```
+
+{% if parallel %}Este proyecto fue generado con **paralelo activado**.{% else %}Este proyecto fue generado en modo **serie**. Activa `parallel: true` cuando quieras mayor velocidad y los jobs no tengan dependencias entre si.{% endif %}
+{% endif %}
 
 ---
 

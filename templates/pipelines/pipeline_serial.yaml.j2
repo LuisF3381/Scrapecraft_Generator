@@ -1,10 +1,10 @@
 # =============================================================================
-# Pipeline: ejecucion serial — todos los jobs en secuencia
+# Pipeline: ejecucion {{ "paralela" if parallel else "serial" }} — todos los jobs {{ "en simultaneo" if parallel else "en secuencia" }}
 #
 # Ejecutar con:
 #   python -m src.main --pipeline config/pipelines/pipeline.yaml
 #
-# Si un job falla, el siguiente se ejecuta igualmente.
+# Si un job falla, los demas {{ "siguen ejecutandose" if parallel else "se ejecutan igualmente" }}.
 # Al finalizar se muestra un resumen con los jobs exitosos y fallidos.
 # =============================================================================
 
@@ -13,7 +13,12 @@
 # =========================================================================
 
 name: {{ project_name }}
-description: "Pipeline serial de {{ project_name }}"
+description: "Pipeline {{ "paralelo" if parallel else "serial" }} de {{ project_name }}"
+{% if parallel %}
+parallel: true              # Los jobs se ejecutan simultaneamente con ThreadPoolExecutor
+{% else %}
+# parallel: true            # Descomentar para ejecutar los jobs en paralelo (simultaneamente)
+{% endif %}
 
 jobs:
 {% for job in jobs %}
@@ -22,7 +27,9 @@ jobs:
     #   clave: valor    # Se reciben como dict en scrape(driver, web_config, params)
     #   numero: 42
     #   activo: true
+    # enabled: false    # Descomentar para desactivar este job sin eliminarlo del pipeline
 {% endfor %}
+
 # Consolidacion desactivada. Para activarla:
 #   1. Crea src/consolidadores/mi_consolidador.py
 #   2. Descomenta el bloque y ajusta el modulo y formato

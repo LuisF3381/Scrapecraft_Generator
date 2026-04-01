@@ -28,6 +28,13 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+**3. Configurar variables de entorno**
+
+```bash
+cp .env.example .env
+# Editar .env con los valores reales (proxy, user-agent, nivel de log)
+```
+
 > Todos los comandos deben ejecutarse desde la **raiz del proyecto** (`{{ project_name }}/`) con el entorno virtual activo.
 
 ---
@@ -39,15 +46,16 @@ pip install -r requirements.txt
 ├── src/
 │   ├── main.py                        # CLI dispatcher (framework — no modificar)
 │   ├── shared/                        # Motor ETL (framework — no modificar)
-│   │   ├── job_runner.py
-│   │   ├── storage.py
-│   │   ├── driver_config.py
-│   │   ├── logger.py
-│   │   └── utils.py
+│   │   ├── job_runner.py              # Orquestacion ETL: scrape → raw → process → validate → output
+│   │   ├── storage.py                 # I/O en multiples formatos con escritura atomica
+│   │   ├── driver_config.py           # Inicializacion del driver con opciones anti-deteccion
+│   │   ├── logger.py                  # Logging dual archivo+consola, thread-safe para paralelo
+│   │   ├── run_history.py             # Historial de runs en run_history/<job>.jsonl
+│   │   └── utils.py                   # safe_get_text(), safe_get_attr()
 {% for job in jobs %}
 │   ├── {{ job }}/                     # Job: {{ job }}
 │   │   ├── web_config.yaml            # URL, selectores XPath y waits
-│   │   ├── settings.py                # DRIVER_CONFIG, STORAGE_CONFIG, RAW_CONFIG
+│   │   ├── settings.py                # DRIVER_CONFIG, STORAGE_CONFIG, SKIP_PROCESS
 │   │   ├── scraper.py                 # Logica de navegacion y extraccion (Data Engineer)
 │   │   ├── utils.py                   # parse_record() campo a campo (Data Engineer)
 │   │   ├── process.py                 # Transformaciones y tipado (Data Engineer)
@@ -55,15 +63,15 @@ pip install -r requirements.txt
 {% endfor %}
 {% if consolidado %}
 │   └── consolidadores/
-│       └── consolidador.py            # Logica de consolidacion multi-job
+│       └── consolidador.py            # Logica de consolidacion multi-job (Data Engineer)
 {% endif %}
 ├── config/
-│   ├── global_settings.py             # LOG_CONFIG y DATA_CONFIG (global)
+│   ├── global_settings.py             # LOG_CONFIG global
 │   └── pipelines/
 {% if serial and not consolidado %}
-│       └── pipeline.yaml              # Pipeline serial con todos los jobs
+│       └── pipeline.yaml              # Pipeline {{ "paralelo" if parallel else "serial" }} con todos los jobs
 {% elif serial and consolidado %}
-│       └── pipeline_consolidado.yaml  # Pipeline serial con consolidacion
+│       └── pipeline_consolidado.yaml  # Pipeline {{ "paralelo" if parallel else "serial" }} con consolidacion
 {% else %}
 {% for job in jobs %}
 │       └── {{ job }}.yaml
@@ -76,119 +84,96 @@ pip install -r requirements.txt
 │   └── {{ job }}/
 │       └── test_{{ job }}.py
 {% endfor %}
-├── output/                            # Datos procesados (se crea en ejecucion)
-├── raw/                               # Datos en bruto (se crea en ejecucion)
-├── log/                               # Logs de ejecucion (se crea en ejecucion)
-└── latest/                            # Ultima ejecucion con rutas fijas (se crea en ejecucion)
+├── run_history/                       # Historial de runs por job (JSON Lines, generado en ejecucion)
+├── output/                            # Datos procesados (generado en ejecucion)
+├── raw/                               # Datos en bruto (generado en ejecucion)
+├── log/                               # Logs de ejecucion (generado en ejecucion)
+├── latest/                            # Ultima ejecucion con rutas fijas (generado en ejecucion)
+├── .env.example                       # Plantilla de variables de entorno
+└── .env                               # Variables de entorno reales (no commitear)
 ```
 
 ---
 
 ## Zona Data Engineer
 
-Cada job tiene archivos de implementacion en dos capas independientes.
+Ver **`MANUAL_DATA_ENGINEER.md`** para la guia completa de implementacion.
 
-### Orden recomendado de implementacion
+### Archivos a implementar por job
+
+| Archivo | Descripcion |
+|---|---|
+| `web_config.yaml` | URL objetivo, selectores XPath del contenedor y campos, waits |
+| `scraper.py` | Navegacion con SeleniumBase, llamada a `parse_record()` por cada item |
+| `utils.py` | `parse_record()`: extrae cada campo usando `safe_get_text`/`safe_get_attr` |
+| `process.py` | Limpieza, tipado y deduplicacion del raw (todas las columnas llegan como str) |
+| `settings.py` | `DRIVER_CONFIG` y `STORAGE_CONFIG` (formatos, retenciones, format_config) |
+{% if consolidado %}
+| `consolidadores/consolidador.py` | Combina los DataFrames de los jobs en un unico dataset |
+{% endif %}
+
+### Flujo ETL
 
 ```
-1. web_config.yaml  → definir URL y selectores XPath
-2. settings.py      → ajustar driver, storage y raw si es necesario
-3. scraper.py       → implementar navegacion y extraccion
-4. utils.py         → implementar parse_record() campo a campo
-5. process.py       → implementar transformaciones y tipado
-6. validate.py      → implementar validaciones de calidad (Gobierno de Datos)
+scrape() → save_raw → process() → validate() → save_output
 ```
 
-### `web_config.yaml`
-
-```yaml
-url: "https://www.sitio-objetivo.com/pagina"
-
-selectors:
-  container: '//div[@class="elemento-repetido"]'  # un elemento por registro
-  Campo1:    './/h2'                               # relativo al container
-  Campo2:    './/span[@class="precio"]'
-
-waits:
-  reconnect_attempts: 3
-  after_load: 3        # aumentar para sitios con contenido dinamico (JS/AJAX)
-```
-
-### `scraper.py` — lo que ya provee el framework
+### `settings.py` — referencia rapida
 
 ```python
-def scrape(driver, web_config, params=None):
-    params    = params or {}
-    url       = web_config["url"]        # <- inyectado por el framework
-    selectors = web_config["selectors"]  # <- inyectado por el framework
-    waits     = web_config["waits"]      # <- inyectado por el framework
+DRIVER_CONFIG = {
+    "headless":    False,          # True en produccion/servidores
+    "undetected":  True,           # True para sitios con Cloudflare / anti-bot
+    "maximize":    True,
+    "window_size": None,           # Ej: (1920, 1080)
+    "user_agent":  os.environ.get("SCRAPER_USER_AGENT") or None,  # desde .env
+    "proxy":       os.environ.get("SCRAPER_PROXY") or None,       # desde .env
+}
 
-    # Implementar aqui: navegacion, captcha, extraccion
-    driver.open(url)
-    items = driver.find_elements(By.XPATH, selectors["container"])
-    datos = [parse_record(item, selectors, i) for i, item in enumerate(items, 1)]
-    return datos
+STORAGE_CONFIG = {
+    "output_folder":  "output/<job>",
+    "filename":       "<job>",
+    "naming_mode":    "date_suffix",        # overwrite | date_suffix | timestamp_suffix | date_folder
+    "output_formats": ["csv", "json"],      # csv | json | xml | xlsx
+    "raw_folder":     "raw/<job>",
+    "retention":      {"mode": "keep_last_n", "value": 5},  # keep_all | keep_last_n | keep_days
+    "format_config": {
+        "csv":  {"encoding": "utf-8", "separator": ";", "index": False},
+        "json": {"indent": 2, "force_ascii": False, "orient": "records"},
+    }
+}
+
+SKIP_PROCESS = False  # True: omite process.py, guarda raw como output directamente
 ```
 
-### `utils.py` — extraccion campo a campo
+### Variables de entorno (`.env`)
 
-```python
-def parse_record(item, selectors, index):
-    registro = {"Numero": index}
-    for field_name, field_xpath in selectors.items():
-        if field_name == "container":
-            continue
-        registro[field_name] = safe_get_text(item, field_xpath)
-        # Para atributos: safe_get_attr(item, field_xpath, "href")
-    return registro
-```
-
-### `process.py` — transformaciones
-
-```python
-def process(df):
-    df = df.copy()
-    # Todos los campos llegan como str (lineamiento string-first)
-    # Ejemplo: df["Precio"] = df["Precio"].str.replace("€","").astype(float)
-    return df.to_dict(orient="records")
+```bash
+LOG_LEVEL=INFO               # DEBUG | INFO | WARNING | ERROR
+SCRAPER_PROXY=               # ip:puerto (vacio = sin proxy)
+SCRAPER_USER_AGENT=          # vacio = User-Agent por defecto de Chrome
 ```
 
 ---
 
 ## Zona Gobierno de Datos
 
-### `validate.py` — validaciones de calidad
+Ver **`MANUAL_GOBERNANZA.md`** para la guia completa de validaciones.
 
-El framework ejecuta `validate()` automaticamente despues de `process()` y antes de guardar el output. Si retorna errores, el job falla y no se guarda ningun archivo.
+### `validate.py` — patron de dos severidades
 
 ```python
 def validate(df: pd.DataFrame) -> list[str]:
     errors: list[str] = []
 
-    # =========================================================================
-    # ZONA GOBIERNO DE DATOS
-    # =========================================================================
-
-    # Ejemplo: verificar que no hay registros vacios en columnas criticas
-    # if df["Precio"].eq("").any():
-    #     errors.append("Hay registros con Precio vacio")
-
-    # Ejemplo: verificar rango de valores
-    # precios = pd.to_numeric(df["Precio"], errors="coerce")
-    # if precios.isna().any():
-    #     errors.append(f"{precios.isna().sum()} registros con Precio no numerico")
-
-    # =========================================================================
-    # FIN ZONA GOBIERNO DE DATOS
-    # =========================================================================
+    # errors.append(msg)  → BLOQUEA el guardado (problema critico)
+    # logger.warning(msg) → Solo registra, no bloquea (anomalia aceptable)
 
     return errors
 ```
 
-**Reglas de implementacion:**
-- Solo lectura — no modificar el DataFrame
-- Cada error es un string descriptivo con contexto suficiente para diagnosticar
-- Lista vacia = validacion exitosa
+El framework ejecuta `validate()` despues de `process()` y **antes de guardar**.
+Si `errors` no esta vacio, el output **no se escribe**.
 
 ---
 
@@ -202,12 +187,12 @@ python -m src.main --list
 # Ejecutar job individual
 python -m src.main --job {{ job }}
 
-# Reprocesar raw existente sin volver a scrapear
+# Reprocesar raw existente sin volver a scraper
 python -m src.main --job {{ job }} --reprocess <sufijo_timestamp>
 
 {% endfor %}
 {% if serial and not consolidado %}
-# Ejecutar pipeline serial
+# Ejecutar pipeline
 python -m src.main --pipeline config/pipelines/pipeline.yaml
 {% elif serial and consolidado %}
 # Ejecutar pipeline con consolidacion
@@ -220,37 +205,67 @@ python -m src.main --pipeline config/pipelines/{{ job }}.yaml
 {% endif %}
 ```
 
-El sufijo de `--reprocess` es el timestamp que aparece en el log al finalizar el scraping:
+El sufijo de `--reprocess` aparece en el log al finalizar el scraping:
 
 ```
-INFO - Raw guardado en raw/{{ jobs[0] }}/{{ jobs[0] }}_20260324_181055.csv
 INFO - Si el proceso falla, puedes reprocesar con: --reprocess 20260324_181055
 ```
 
+{% if serial and jobs | length > 1 %}
+### Modo paralelo
+
+Los jobs del pipeline pueden ejecutarse simultaneamente activando `parallel: true` en el YAML:
+
+```yaml
+# config/pipelines/pipeline{{ "_consolidado" if consolidado else "" }}.yaml
+parallel: true
+```
+
+Cada job escribe en su propio archivo de log gracias al sistema de logging thread-safe.
+{% if consolidado %}La consolidacion siempre se ejecuta en serie al final, tras completarse todos los jobs.{% endif %}
+
+{% endif %}
 ### Carpeta `latest/`
 
-Despues de cada ejecucion exitosa, el framework copia el output y el log en `latest/<job>/` con nombres fijos (sin timestamp). Esto permite que procesos externos consuman siempre la misma ruta independientemente del `naming_mode`.
+Despues de cada ejecucion el framework copia el output y el log en `latest/<job>/` con nombres fijos. Permite que procesos externos consuman siempre la misma ruta independientemente del `naming_mode`.
 
 ```
 latest/
 {% for job in jobs %}
 └── {{ job }}/
-    ├── {{ job }}.csv     # output con nombre fijo (formato segun output_formats)
+    ├── {{ job }}.csv     # output con nombre fijo
     └── run.log           # log de la ultima ejecucion
 {% endfor %}
+{% if consolidado %}
+└── {{ project_name }}_consolidado/
+    ├── consolidado.csv
+    └── run.log           # logs de todos los jobs concatenados
+{% endif %}
 ```
+
+### Historial de runs (`run_history/`)
+
+Cada ejecucion se registra automaticamente en `run_history/<job>.jsonl`:
+
+```json
+{"job": "{{ jobs[0] }}", "started_at": "2026-01-30T14:30:52", "mode": "scrape",
+ "status": "success", "raw_suffix": "20260130_143052", "duration_s": 12.3,
+ "outputs": ["output/{{ jobs[0] }}/{{ jobs[0] }}_20260130.csv"]}
+```
+
+Usa `raw_suffix` de una ejecucion fallida para reprocesar sin volver a scraper.
 
 ---
 
 ## Tests
 
-**Tests de configuracion** — sin browser, ejecucion rapida:
+**Tests de configuracion** (sin browser, ejecucion rapida):
 
 ```bash
 pytest tests/test_global.py tests/test_pipelines.py -v
 ```
 
-**Tests por job** — incluyen un test que abre Chrome en modo headless:
+**Tests por job** (incluyen un test que abre Chrome en modo headless):
 
 ```bash
 {% for job in jobs %}
@@ -264,64 +279,7 @@ pytest tests/{{ job }}/ -v -s
 pytest tests/ -v -s
 ```
 
-> El test `test_driver_instance_created_with_settings_file` abre Chrome en modo headless para verificar que el driver se inicializa correctamente con la configuracion de `settings.py`. Requiere Chrome instalado.
-
----
-
-## Configuracion
-
-### Global — `config/global_settings.py`
-
-Aplica a todos los jobs. Modificar solo en casos excepcionales (cambio de encoding, separador CSV, etc.).
-
-```python
-LOG_CONFIG  = {"log_folder": "log", "level": "INFO"}
-DATA_CONFIG = {
-    "csv":  {"encoding": "utf-8", "separator": ";", "index": False},
-    "json": {"indent": 2, "force_ascii": False, "orient": "records"},
-    "xml":  {"root": "registros", "row": "registro", "encoding": "utf-8"},
-    "xlsx": {"sheet_name": "Datos", "index": False}
-}
-```
-
-### Por job — `src/<job>/settings.py`
-
-```python
-DRIVER_CONFIG = {
-    "headless":    False,   # True: sin ventana (produccion/servidores)
-    "undetected":  True,    # True: evasion anti-bot (Cloudflare, reCAPTCHA)
-    "maximize":    True,
-    "window_size": None,    # Ej: (1920, 1080)
-    "user_agent":  None,    # Ej: "Mozilla/5.0 ..."
-    "proxy":       None     # Ej: "192.168.1.1:8080"
-}
-
-STORAGE_CONFIG = {
-    "output_folder":  "output/<job>",
-    "filename":       "<job>",
-    "naming_mode":    "date_suffix",   # overwrite | date_suffix | timestamp_suffix | date_folder
-    "output_formats": ["csv", "json"]  # csv | json | xml | xlsx
-}
-
-RAW_CONFIG = {
-    "raw_folder": "raw/<job>",
-    "filename":   "<job>",
-    "format":     "csv",
-    "retention":  {"mode": "keep_last_n", "value": 5}
-    # retention modes: keep_all | keep_last_n | keep_days
-}
-
-SKIP_PROCESS = False  # True: omite process.py, guarda raw como output
-```
-
-#### Modos de nombrado (`naming_mode`)
-
-| Modo | Archivo generado |
-|---|---|
-| `overwrite` | `output/<job>/<job>.csv` — sobreescribe siempre |
-| `date_suffix` | `output/<job>/<job>_20260130.csv` — uno por dia |
-| `timestamp_suffix` | `output/<job>/<job>_20260130_143052.csv` — uno por ejecucion |
-| `date_folder` | `output/<job>/20260130/<job>.csv` — organizado por fecha |
+> `test_driver_instance_created_with_settings_file` abre Chrome en modo headless para verificar que el driver se inicializa correctamente. Requiere Chrome instalado.
 
 ---
 

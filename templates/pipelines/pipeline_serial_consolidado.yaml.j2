@@ -1,5 +1,5 @@
 # =============================================================================
-# Pipeline: ejecucion serial con consolidacion final
+# Pipeline: ejecucion {{ "paralela" if parallel else "serial" }} con consolidacion final
 #
 # Ejecutar con:
 #   python -m src.main --pipeline config/pipelines/pipeline_consolidado.yaml
@@ -18,14 +18,21 @@
 # =========================================================================
 
 name: {{ project_name }}_consolidado
-description: "Pipeline serial con consolidacion de {{ project_name }}"
+description: "Pipeline {{ "paralelo" if parallel else "serial" }} con consolidacion de {{ project_name }}"
+{% if parallel %}
+parallel: true              # Los jobs se ejecutan simultaneamente con ThreadPoolExecutor
+{% else %}
+# parallel: true            # Descomentar para ejecutar los jobs en paralelo (simultaneamente)
+{% endif %}
 
 jobs:
 {% for job in jobs %}
   - name: {{ job }}
     # params:           # Opcional: parametros especificos del job (tipos YAML nativos)
     #   clave: valor
+    # enabled: false    # Descomentar para desactivar este job sin eliminarlo del pipeline
 {% endfor %}
+
 consolidate:
   enabled: true
   module: consolidador        # src/consolidadores/consolidador.py

@@ -5,7 +5,8 @@
 # Se activa desde el pipeline YAML con el bloque 'consolidate'.
 #
 # Restriccion: todos los jobs del pipeline deben incluir el formato definido
-# en consolidate.format dentro de su STORAGE_CONFIG['output_formats'].
+# en consolidate.format dentro de su STORAGE_CONFIG['output_formats'], y deben
+# compartir la misma format_config para ese formato.
 # =============================================================================
 
 import pandas as pd
@@ -26,6 +27,15 @@ STORAGE_CONFIG = {
 
     # Formatos en los que se guarda el consolidado
     "output_formats": ["csv"],
+
+    # Configuracion de formato — debe coincidir con format_config de los jobs
+    "format_config": {
+        "csv": {
+            "encoding": "utf-8",
+            "separator": ";",
+            "index": False
+        }
+    }
 }
 
 # =========================================================================

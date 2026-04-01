@@ -135,14 +135,20 @@ def run_wizard() -> dict:
         # pero se le pregunta igual para que el YAML generado sea coherente.
         serial = _ask_yn("¿Incluir el job en un pipeline?", default=True)
         consolidado = False
+        parallel = False
     else:
         serial = _ask_yn(
             f"¿Ejecutar los {n_jobs} jobs en serie (un unico pipeline con todos)?",
             default=True,
         )
         consolidado = False
+        parallel = False
         if serial:
             consolidado = _ask_yn("¿Con consolidacion de resultados al final?", default=False)
+            parallel = _ask_yn(
+                f"¿Ejecutar los {n_jobs} jobs en paralelo (simultaneamente)?",
+                default=False,
+            )
 
     return {
         "project_name": project_name,
@@ -150,6 +156,7 @@ def run_wizard() -> dict:
         "jobs":         jobs,
         "serial":       serial,
         "consolidado":  consolidado,
+        "parallel":     parallel,
     }
 
 
@@ -171,12 +178,13 @@ def show_summary(config: dict) -> bool:
         print(f"              - {job}")
 
     if config["serial"]:
+        modo = "Paralelo" if config["parallel"] else "Serial"
         if config["consolidado"]:
-            print("  Pipeline  : Serial con consolidacion")
+            print(f"  Pipeline  : {modo} con consolidacion")
             print("              → config/pipelines/pipeline_consolidado.yaml")
             print("              → src/consolidadores/consolidador.py")
         else:
-            print("  Pipeline  : Serial sin consolidacion")
+            print(f"  Pipeline  : {modo} sin consolidacion")
             print("              → config/pipelines/pipeline.yaml")
     else:
         print("  Pipelines : Individual por job")
@@ -301,6 +309,8 @@ def _print_success(project_root: Path, config: dict) -> None:
     if config["serial"]:
         pipeline = "pipeline_consolidado.yaml" if config["consolidado"] else "pipeline.yaml"
         print(f"       python -m src.main --pipeline config/pipelines/{pipeline}")
+        if config["parallel"]:
+            print("       (pipeline configurado en modo paralelo — todos los jobs corren a la vez)")
     print()
     print("  Manuales de referencia generados en el proyecto:")
     print("    MANUAL_DATA_ENGINEER.md  — guia para implementar scraper, process y settings")
