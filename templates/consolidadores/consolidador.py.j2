@@ -43,18 +43,19 @@ STORAGE_CONFIG = {
 # =========================================================================
 
 
-def consolidate(job_dataframes: dict[str, pd.DataFrame], params: dict = None) -> list[dict]:
+def consolidate(job_dataframes: dict[str, "pd.DataFrame | None"], params: dict = None) -> list[dict]:
     """
     Combina los outputs de los jobs del pipeline en un unico dataset.
 
-    El framework carga automaticamente los archivos de cada job y los entrega
-    como DataFrames listos para usar. Solo implementa la logica de combinacion.
+    El framework entrega los DataFrames de cada job. Si un job tiene schedule
+    y no corrio ese dia, su valor en el dict es None. El data engineer decide
+    como manejar esa ausencia (ignorar la fuente, consolidar solo los presentes, etc.).
 
     Args:
-        job_dataframes: Mapa de job_name -> DataFrame con los datos del job.
-                        Jobs disponibles en este pipeline:
+        job_dataframes: Mapa de job_name -> DataFrame (o None si fue omitido por schedule).
+                        Jobs configurados en este pipeline:
 {% for job in jobs %}
-                          - "{{ job }}"
+                          - "{{ job }}"  # None si no corrio hoy por schedule
 {% endfor %}
         params:         Parametros opcionales definidos en consolidate.params
                         del pipeline YAML.
@@ -68,21 +69,23 @@ def consolidate(job_dataframes: dict[str, pd.DataFrame], params: dict = None) ->
     params = params or {}
 
     # TODO: desempaquetar los DataFrames de cada job
+    # Si el job tiene schedule y no corrio hoy, df sera None — verificar antes de usar
 {% for job in jobs %}
-    # {{ job }}_df = job_dataframes["{{ job }}"]
+    # {{ job }}_df = job_dataframes["{{ job }}"]  # None si no corrio hoy
 {% endfor %}
 
     # TODO: implementar la logica de consolidacion
     #
-    # Ejemplo — concatenar todos los jobs con una columna que identifica la fuente:
+    # Ejemplo — concatenar los jobs disponibles con columna de origen:
+    # frames = []
 {% for job in jobs %}
-    # {{ job }}_df["_fuente"] = "{{ job }}"
+    # if {{ job }}_df is not None:
+    #     {{ job }}_df["_fuente"] = "{{ job }}"
+    #     frames.append({{ job }}_df)
 {% endfor %}
-    # consolidado = pd.concat(
-    #     [{% for job in jobs %}{{ job }}_df{% if not loop.last %}, {% endif %}{% endfor %}],
-    #     ignore_index=True
-    # )
-    # return consolidado.to_dict(orient="records")
+    # if not frames:
+    #     return []
+    # return pd.concat(frames, ignore_index=True).to_dict(orient="records")
 
     # =========================================================================
     # FIN ZONA DATA ENGINEER (2/2)

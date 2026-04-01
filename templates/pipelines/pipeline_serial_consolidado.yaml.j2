@@ -31,6 +31,9 @@ jobs:
     # params:           # Opcional: parametros especificos del job (tipos YAML nativos)
     #   clave: valor
     # enabled: false    # Descomentar para desactivar este job sin eliminarlo del pipeline
+    # schedule:         # Opcional: ejecutar solo en fechas concretas (omitir = siempre)
+    #   day_of_month: 3 #   solo el dia 3 de cada mes (1-31)
+    #   day_of_week: 0  #   solo los lunes (0=lunes...6=domingo; combinable con day_of_month)
 {% endfor %}
 
 consolidate:

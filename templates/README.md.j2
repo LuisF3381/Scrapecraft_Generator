@@ -211,6 +211,30 @@ El sufijo de `--reprocess` aparece en el log al finalizar el scraping:
 INFO - Si el proceso falla, puedes reprocesar con: --reprocess 20260324_181055
 ```
 
+{% if serial %}
+### Schedule por job
+
+Cada job del pipeline puede declarar en que dias debe ejecutarse. Configura el pipeline para correr diariamente (cron / Task Scheduler) y cada job decide si le corresponde ejecutarse ese dia:
+
+```yaml
+jobs:
+  - name: {{ jobs[0] }}
+    schedule:
+      day_of_month: 3     # solo el dia 3 de cada mes (1-31)
+    # schedule:
+    #   day_of_week: 0    # solo los lunes (0=lunes ... 6=domingo)
+    #                     # se pueden combinar: day_of_month + day_of_week (AND logico)
+```
+
+Los jobs sin `schedule` siempre corren. Cuando un job es omitido el log indica:
+
+```
+Job '{{ jobs[0] }}' omitido: schedule={'day_of_month': 3}, hoy=01/04/2026
+```
+
+{% if consolidado %}Un job omitido por schedule **no bloquea la consolidacion** — el consolidador recibe `None` para ese job y decide como manejarlo (ver `consolidador.py`). Un job **fallido** si bloquea la consolidacion — la distincion es intencional: un skip es planificado, un fallo no lo es.
+
+{% endif %}{% endif %}
 {% if serial and jobs | length > 1 %}
 ### Modo paralelo
 

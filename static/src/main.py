@@ -76,6 +76,22 @@ def _make_args(job_name: str) -> argparse.Namespace:
     )
 
 
+def _matches_schedule(schedule: dict | None, today: datetime) -> bool:
+    """Retorna True si hoy coincide con el schedule configurado, o si no hay schedule.
+
+    Claves reconocidas (se pueden combinar, AND logico):
+      day_of_month: 1-31  — solo el dia N de cada mes
+      day_of_week:  0-6   — solo ese dia de la semana (0=lunes, 6=domingo)
+    """
+    if not schedule:
+        return True
+    if "day_of_month" in schedule and today.day != int(schedule["day_of_month"]):
+        return False
+    if "day_of_week" in schedule and today.weekday() != int(schedule["day_of_week"]):
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Consolidacion
 # ---------------------------------------------------------------------------
@@ -133,12 +149,12 @@ def _validate_consolidation(job_entries: list[dict], consolidate_config: dict) -
         raise SystemExit(1)
 
 
-def _run_consolidation(job_outputs: dict[str, Path], consolidate_config: dict, consolidator) -> dict[str, Path]:
+def _run_consolidation(job_dataframes: dict[str, pd.DataFrame | None], consolidate_config: dict, consolidator) -> dict[str, Path]:
     """
     Ejecuta consolidate() con el modulo ya cargado y guarda el resultado.
 
     Args:
-        job_outputs:        Mapa job_name -> Path del archivo generado (formato de consolidacion).
+        job_dataframes:     Mapa job_name -> DataFrame (o None si el job fue omitido por schedule).
         consolidate_config: Bloque 'consolidate' del pipeline YAML.
         consolidator:       Modulo consolidador ya importado por el caller.
 
@@ -147,14 +163,12 @@ def _run_consolidation(job_outputs: dict[str, Path], consolidate_config: dict, c
     """
     params = consolidate_config.get("params") or {}
 
+    ran     = [k for k, v in job_dataframes.items() if v is not None]
+    skipped = [k for k, v in job_dataframes.items() if v is None]
     logger.info(f"\nIniciando consolidacion: {consolidate_config['module']}")
-    logger.info(f"Fuentes: {list(job_outputs.keys())}")
-
-    consolidation_fmt = consolidate_config["format"]
-    job_dataframes: dict[str, pd.DataFrame] = {}
-    for job_name, filepath in job_outputs.items():
-        job_settings = importlib.import_module(f"src.{job_name}.settings")
-        job_dataframes[job_name] = load_output(filepath, consolidation_fmt, job_settings.STORAGE_CONFIG)
+    logger.info(f"Fuentes ejecutadas: {ran}")
+    if skipped:
+        logger.info(f"Fuentes omitidas por schedule (None): {skipped}")
 
     result = consolidator.consolidate(job_dataframes, params)
 
@@ -260,7 +274,28 @@ def _run_parallel(
         pipeline_folder = ""
         collected_logs = []
 
-    total = len(job_entries)
+    today = datetime.now()
+    skipped: list[str] = []
+    active_entries: list[dict] = []
+    for entry in job_entries:
+        if _matches_schedule(entry.get("schedule"), today):
+            active_entries.append(entry)
+        else:
+            logger.info(
+                f"Job '{entry['name']}' omitido: "
+                f"schedule={entry.get('schedule')}, hoy={today.strftime('%d/%m/%Y')}"
+            )
+            skipped.append(entry["name"])
+
+    if not active_entries:
+        logger.info("Todos los jobs fueron omitidos por schedule. Nada que ejecutar.")
+        if skipped:
+            logger.info(f"Jobs omitidos: {', '.join(skipped)}")
+        if is_consolidated:
+            merge_logs_to_latest(pipeline_folder, [])
+        return
+
+    total = len(active_entries)
     failed: list[str] = []
     job_outputs: dict[str, Path] = {}
     consolidation_format: str = (consolidate_config or {}).get("format", "")
@@ -270,7 +305,7 @@ def _run_parallel(
     with ThreadPoolExecutor(max_workers=total) as executor:
         future_to_name = {
             executor.submit(_run_one_job, entry, is_consolidated): entry["name"]
-            for entry in job_entries
+            for entry in active_entries
         }
         for future in as_completed(future_to_name):
             job_name_res, output_paths, log_path, error = future.result()
@@ -287,23 +322,35 @@ def _run_parallel(
                 collected_logs.append(log_path)
 
     logger.info(f"\n{'='*50}")
-    logger.info(f"Paralelo finalizado: {total - len(failed)}/{total} jobs exitosos")
+    logger.info(f"Paralelo finalizado: {total - len(failed)}/{total} jobs ejecutados")
     if failed:
         logger.warning(f"Jobs con error: {', '.join(failed)}")
+    if skipped:
+        logger.info(f"Jobs omitidos por schedule: {', '.join(skipped)}")
 
     if is_consolidated:
         if failed:
             logger.warning(
                 f"Consolidacion omitida: {len(failed)} job(s) fallaron "
-                f"({', '.join(failed)}). Todos los jobs deben ser exitosos."
+                f"({', '.join(failed)}). Todos los jobs deben completarse sin error."
             )
             merge_logs_to_latest(pipeline_folder, collected_logs)
         else:
             consolidator = importlib.import_module(f"src.consolidadores.{consolidate_config['module']}")
             base_filename = consolidator.STORAGE_CONFIG.get("filename")
+            # Construir job_dataframes: DataFrame para los jobs que corrieron, None para los omitidos
+            consolidation_fmt = consolidate_config["format"]
+            job_dataframes: dict[str, pd.DataFrame | None] = {}
+            for entry in job_entries:
+                name = entry["name"]
+                if name in skipped:
+                    job_dataframes[name] = None
+                else:
+                    job_settings = importlib.import_module(f"src.{name}.settings")
+                    job_dataframes[name] = load_output(job_outputs[name], consolidation_fmt, job_settings.STORAGE_CONFIG)
             consolidation_paths: dict[str, Path] = {}
             try:
-                consolidation_paths = _run_consolidation(job_outputs, consolidate_config, consolidator)
+                consolidation_paths = _run_consolidation(job_dataframes, consolidate_config, consolidator)
             except SystemExit:
                 raise
             except Exception as e:
@@ -342,11 +389,21 @@ def _run_series(job_entries: list[dict], consolidate_config: dict | None = None,
         collected_logs = []
 
     total = len(job_entries)
-    failed: list[str] = []
+    today = datetime.now()
+    failed:  list[str] = []
+    skipped: list[str] = []
     job_outputs: dict[str, Path] = {}
     consolidation_format: str = (consolidate_config or {}).get("format", "")
 
     for i, entry in enumerate(job_entries, start=1):
+        if not _matches_schedule(entry.get("schedule"), today):
+            logger.info(
+                f"\n[{i}/{total}] Job '{entry['name']}' omitido: "
+                f"schedule={entry['schedule']}, hoy={today.strftime('%d/%m/%Y')}"
+            )
+            skipped.append(entry["name"])
+            continue
+
         logger.info(f"\n[{i}/{total}] Iniciando job: {entry['name']}")
 
         job_name_res, output_paths, log_path, error = _run_one_job(entry, is_consolidated)
@@ -364,23 +421,35 @@ def _run_series(job_entries: list[dict], consolidate_config: dict | None = None,
             collected_logs.append(log_path)
 
     logger.info(f"\n{'='*50}")
-    logger.info(f"Serie finalizada: {total - len(failed)}/{total} jobs exitosos")
+    logger.info(f"Serie finalizada: {total - len(failed) - len(skipped)}/{total} jobs ejecutados")
     if failed:
         logger.warning(f"Jobs con error: {', '.join(failed)}")
+    if skipped:
+        logger.info(f"Jobs omitidos por schedule: {', '.join(skipped)}")
 
     if is_consolidated:
         if failed:
             logger.warning(
                 f"Consolidacion omitida: {len(failed)} job(s) fallaron "
-                f"({', '.join(failed)}). Todos los jobs deben ser exitosos."
+                f"({', '.join(failed)}). Todos los jobs deben completarse sin error."
             )
             merge_logs_to_latest(pipeline_folder, collected_logs)
         else:
             consolidator = importlib.import_module(f"src.consolidadores.{consolidate_config['module']}")
             base_filename = consolidator.STORAGE_CONFIG.get("filename")
+            # Construir job_dataframes: DataFrame para los jobs que corrieron, None para los omitidos
+            consolidation_fmt = consolidate_config["format"]
+            job_dataframes: dict[str, pd.DataFrame | None] = {}
+            for entry in job_entries:
+                name = entry["name"]
+                if name in skipped:
+                    job_dataframes[name] = None
+                else:
+                    job_settings = importlib.import_module(f"src.{name}.settings")
+                    job_dataframes[name] = load_output(job_outputs[name], consolidation_fmt, job_settings.STORAGE_CONFIG)
             consolidation_paths: dict[str, Path] = {}
             try:
-                consolidation_paths = _run_consolidation(job_outputs, consolidate_config, consolidator)
+                consolidation_paths = _run_consolidation(job_dataframes, consolidate_config, consolidator)
             except SystemExit:
                 raise
             except Exception as e:
@@ -411,6 +480,9 @@ def _load_pipeline(path: str) -> tuple[list[dict], dict | None, str | None, bool
               categoria: mystery
               pagina: 1
             enabled: false          # opcional, omitir o poner true para ejecutar
+            schedule:               # opcional; omitir = ejecutar siempre
+              day_of_month: 3       #   solo el dia 3 de cada mes (1-31)
+              day_of_week: 0        #   solo los lunes (0=lunes...6=domingo; combinable)
 
         consolidate:                # opcional
           enabled: true
@@ -445,8 +517,9 @@ def _load_pipeline(path: str) -> tuple[list[dict], dict | None, str | None, bool
             logger.info(f"Job '{item['name']}' desactivado (enabled: false), omitiendo.")
             continue
         entries.append({
-            "name":   item["name"],
-            "params": item.get("params") or {},
+            "name":     item["name"],
+            "params":   item.get("params") or {},
+            "schedule": item.get("schedule") or None,
         })
 
     consolidate_config = data.get("consolidate") or None

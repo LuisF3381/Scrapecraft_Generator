@@ -172,22 +172,31 @@ def process(df: pd.DataFrame) -> list[dict]:
 ### 6. `src/consolidadores/consolidador.py` — Combinar jobs
 
 ```python
-def consolidate(job_dataframes: dict, params: dict) -> list[dict]:
-    # DataFrames disponibles:
+def consolidate(job_dataframes: dict[str, "pd.DataFrame | None"], params: dict) -> list[dict]:
+    # DataFrames por job.
+    # Si el job tiene schedule y no corrio ese dia, su valor es None.
 {% for job in jobs %}
-    # job_dataframes["{{ job }}"]  ← output del job {{ job }}
+    # job_dataframes["{{ job }}"]  ← DataFrame o None
 {% endfor %}
 
-    # Ejemplo: concatenar con columna de origen
+    # Verificar None antes de usar cada DataFrame:
     import pandas as pd
     frames = []
     for job_name, df in job_dataframes.items():
+        if df is None:
+            continue  # job omitido por schedule ese dia
         df = df.copy()
         df["_fuente"] = job_name
         frames.append(df)
+    if not frames:
+        return []
     resultado = pd.concat(frames, ignore_index=True)
     return resultado.to_dict(orient="records")
 ```
+
+> Un job omitido por schedule llega como `None` — la consolidacion **no se bloquea**.
+> Un job fallido (error) **si bloquea** la consolidacion.
+> La distincion es intencional: un skip es planificado, un fallo no lo es.
 
 ---
 {% endif %}
@@ -205,6 +214,37 @@ cp .env.example .env
 | `LOG_LEVEL` | Nivel de log: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `SCRAPER_PROXY` | Proxy en formato `ip:puerto` (vacio = sin proxy) |
 | `SCRAPER_USER_AGENT` | User-Agent del browser (vacio = por defecto) |
+
+---
+
+## Schedule por job
+
+Cada job del pipeline puede declarar en que dias debe ejecutarse. Configura el pipeline para correr diariamente (cron / Task Scheduler) y cada job decide si le corresponde ejecutarse ese dia.
+
+```yaml
+# config/pipelines/{{ "pipeline_consolidado.yaml" if consolidado else "pipeline.yaml" }}
+jobs:
+  - name: {{ jobs[0] }}
+    schedule:
+      day_of_month: 3     # solo el dia 3 de cada mes (1-31)
+  # schedule:
+  #   day_of_week: 0      # solo los lunes (0=lunes ... 6=domingo)
+  #                       # combinables: day_of_month + day_of_week (AND logico)
+  # (sin schedule = corre siempre)
+```
+
+| Campo | Valores | Descripcion |
+|---|---|---|
+| `day_of_month` | 1-31 | Dia del mes |
+| `day_of_week` | 0-6 | Dia de la semana (0=lunes, 6=domingo) |
+
+Cuando un job es omitido el log indica:
+```
+Job '{{ jobs[0] }}' omitido: schedule={'day_of_month': 3}, hoy=01/04/2026
+```
+{% if consolidado %}
+> Con consolidacion: el job omitido llega como `None` al consolidador (ver seccion 6).
+{% endif %}
 
 ---
 
