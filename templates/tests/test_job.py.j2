@@ -79,7 +79,8 @@ class TestStorageConfig:
 
     def test_storage_config_has_required_keys(self):
         """Verifica que STORAGE_CONFIG tiene las claves requeridas."""
-        required_keys = ["output_folder", "filename", "naming_mode"]
+        required_keys = ["output_folder", "filename", "naming_mode", "output_formats",
+                         "raw_folder", "retention", "format_config"]
         for key in required_keys:
             assert key in settings.STORAGE_CONFIG, f"Falta '{key}' en STORAGE_CONFIG"
         print("[OK] STORAGE_CONFIG tiene todas las claves requeridas")
@@ -98,6 +99,13 @@ class TestStorageConfig:
             "output_folder debe ser una cadena no vacia"
         print(f"[OK] output_folder configurado: {folder}")
 
+    def test_storage_config_raw_folder_is_valid_path(self):
+        """Verifica que raw_folder es una ruta valida no vacia."""
+        folder = settings.STORAGE_CONFIG["raw_folder"]
+        assert isinstance(folder, str) and folder.strip(), \
+            "raw_folder debe ser una cadena no vacia"
+        print(f"[OK] raw_folder configurado: {folder}")
+
     def test_storage_config_output_formats_are_valid(self):
         """Verifica que los formatos de salida son validos."""
         valid_formats = ["csv", "json", "xml", "xlsx"]
@@ -107,6 +115,29 @@ class TestStorageConfig:
             assert fmt in valid_formats, \
                 f"Formato invalido: '{fmt}'. Debe ser uno de {valid_formats}"
         print(f"[OK] Formatos de salida validos: {formats}")
+
+    def test_storage_config_retention_mode_is_valid(self):
+        """Verifica que el modo de retencion es valido."""
+        valid_modes = ["keep_all", "keep_last_n", "keep_days"]
+        mode = settings.STORAGE_CONFIG["retention"]["mode"]
+        assert mode in valid_modes, f"Modo invalido: {mode}. Debe ser uno de {valid_modes}"
+        print(f"[OK] Modo de retencion valido: {mode}")
+
+    def test_storage_config_format_config_covers_output_formats(self):
+        """Verifica que format_config define config para cada formato en output_formats."""
+        valid_formats = ["csv", "json", "xml", "xlsx"]
+        output_formats = settings.STORAGE_CONFIG.get("output_formats", [])
+        format_config = settings.STORAGE_CONFIG.get("format_config", {})
+        assert isinstance(format_config, dict) and format_config, \
+            "format_config debe ser un dict no vacio"
+        for fmt in output_formats:
+            assert fmt in format_config, \
+                f"format_config no define config para el formato '{fmt}'. " \
+                f"Agrega una entrada '{fmt}' en STORAGE_CONFIG['format_config']"
+            assert isinstance(format_config[fmt], dict) and format_config[fmt], \
+                f"format_config['{fmt}'] debe ser un dict no vacio"
+            assert fmt in valid_formats, f"Formato invalido en format_config: '{fmt}'"
+            print(f"[OK] format_config['{fmt}'] configurado correctamente")
 
 
 class TestDriverConfig:
@@ -132,38 +163,6 @@ class TestDriverConfig:
             print("[OK] Driver inicializado correctamente con configuracion de settings.py")
         finally:
             driver.quit()
-
-
-class TestRawConfig:
-    """Tests para validar RAW_CONFIG en settings.py de {{ job_name }}"""
-
-    def test_settings_has_raw_config(self):
-        """Verifica que settings.py tiene RAW_CONFIG."""
-        assert hasattr(settings, "RAW_CONFIG")
-        assert isinstance(settings.RAW_CONFIG, dict)
-        print("[OK] settings.py contiene RAW_CONFIG")
-
-    def test_raw_config_has_required_keys(self):
-        """Verifica que RAW_CONFIG tiene las claves requeridas."""
-        required_keys = ["raw_folder", "filename", "format", "retention"]
-        for key in required_keys:
-            assert key in settings.RAW_CONFIG, f"Falta '{key}' en RAW_CONFIG"
-        print("[OK] RAW_CONFIG tiene todas las claves requeridas")
-
-    def test_raw_config_format_is_valid(self):
-        """Verifica que el formato raw es uno de los soportados."""
-        valid_formats = ["csv", "json", "xml", "xlsx"]
-        fmt = settings.RAW_CONFIG["format"]
-        assert fmt in valid_formats, \
-            f"Formato raw invalido: '{fmt}'. Debe ser uno de {valid_formats}"
-        print(f"[OK] Formato raw valido: {fmt}")
-
-    def test_raw_config_retention_mode_is_valid(self):
-        """Verifica que el modo de retencion es valido."""
-        valid_modes = ["keep_all", "keep_last_n", "keep_days"]
-        mode = settings.RAW_CONFIG["retention"]["mode"]
-        assert mode in valid_modes, f"Modo invalido: {mode}. Debe ser uno de {valid_modes}"
-        print(f"[OK] Modo de retencion valido: {mode}")
 
 
 class TestValidateConfig:

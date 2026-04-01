@@ -1,5 +1,6 @@
-seleniumbase
-pandas
-pyyaml
-pytest
-openpyxl
+seleniumbase~=4.46
+pandas~=3.0
+pyyaml~=6.0
+pytest~=9.0
+openpyxl~=3.1
+python-dotenv~=1.2

@@ -21,7 +21,86 @@ def validate(df: pd.DataFrame) -> list[str]:
 
     # =========================================================================
     # ZONA GOBIERNO DE DATOS
+    #
+    # Dos niveles de severidad:
+    #   errors.append(...)  → bloquea el guardado. Usar cuando el problema
+    #                         hace que el dataset sea inutil o incorrecto.
+    #   logger.warning(...) → solo registra, no bloquea. Usar cuando la
+    #                         anomalia es aceptable y no invalida el dataset.
     # =========================================================================
+
+    # -------------------------------------------------------------------------
+    # 1. Minimo de registros
+    #    Un scraper que retorna 0 o muy pocos registros probablemente fallo
+    #    (bloqueo, cambio de estructura en la web, etc.).
+    # -------------------------------------------------------------------------
+    # MIN_REGISTROS = 10
+    # if len(df) < MIN_REGISTROS:
+    #     errors.append(
+    #         f"Se esperaban al menos {MIN_REGISTROS} registros, se obtuvieron {len(df)}."
+    #     )
+
+    # -------------------------------------------------------------------------
+    # 2. Nulos / vacios en campos criticos
+    #    Campos que identifican un registro (clave de negocio) → errors.append().
+    #    Campos importantes pero no identificadores → logger.warning().
+    # -------------------------------------------------------------------------
+    # CAMPOS_CRITICOS = ["Campo1"]
+    # for campo in CAMPOS_CRITICOS:
+    #     if campo in df.columns:
+    #         nulos = df[campo].isna() | (df[campo].astype(str).str.strip() == "")
+    #         n = int(nulos.sum())
+    #         if n > 0:
+    #             errors.append(
+    #                 f"Campo critico '{campo}' tiene {n} valor(es) nulo(s) o vacio(s)."
+    #             )
+
+    # CAMPOS_IMPORTANTES = ["Campo2"]
+    # for campo in CAMPOS_IMPORTANTES:
+    #     if campo in df.columns:
+    #         n = int(df[campo].isna().sum())
+    #         if n > 0:
+    #             logger.warning(
+    #                 f"Campo '{campo}' tiene {n} valor(es) nulo(s) ({n / len(df) * 100:.1f}%)."
+    #             )
+
+    # -------------------------------------------------------------------------
+    # 3. Tipos de dato
+    #    Si process.py debia convertir una columna a numerico y no lo logro,
+    #    el dataset tiene datos corruptos → errors.append().
+    # -------------------------------------------------------------------------
+    # if "Campo_Numerico" in df.columns:
+    #     no_numericos = pd.to_numeric(df["Campo_Numerico"], errors="coerce").isna() & df["Campo_Numerico"].notna()
+    #     n = int(no_numericos.sum())
+    #     if n > 0:
+    #         errors.append(
+    #             f"'Campo_Numerico' tiene {n} valor(es) no numericos tras el procesamiento."
+    #         )
+
+    # -------------------------------------------------------------------------
+    # 4. Rango de valores
+    #    Anomalias puntuales que no invalidan el dataset → logger.warning().
+    #    Si el problema es sistematico considera usar errors.append() en su lugar.
+    # -------------------------------------------------------------------------
+    # if "Campo_Numerico" in df.columns:
+    #     valores = pd.to_numeric(df["Campo_Numerico"], errors="coerce")
+    #     n = int((valores <= 0).sum())
+    #     if n > 0:
+    #         logger.warning(f"'Campo_Numerico' tiene {n} valor(es) <= 0.")
+
+    # -------------------------------------------------------------------------
+    # 5. Deduplicacion
+    #    Red de seguridad: si process.py ya aplico drop_duplicates(), este
+    #    chequeo verifica que no queden duplicados. Si los hay, es un error
+    #    de integridad → errors.append().
+    #    Nota: la eliminacion de duplicados va en process.py, no aqui.
+    # -------------------------------------------------------------------------
+    # CLAVE_UNICA = ["Campo1"]
+    # n = int(df.duplicated(subset=CLAVE_UNICA, keep=False).sum())
+    # if n > 0:
+    #     errors.append(
+    #         f"Se encontraron {n} registro(s) duplicados por clave {CLAVE_UNICA}."
+    #     )
 
     # =========================================================================
     # FIN ZONA GOBIERNO DE DATOS

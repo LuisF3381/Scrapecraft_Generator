@@ -1,0 +1,212 @@
+# Manual — Gobierno de Datos
+
+Proyecto: **{{ project_name }}**
+Jobs: {% for job in jobs %}**{{ job }}**{% if not loop.last %}, {% endif %}{% endfor %}
+
+Este manual describe como implementar las validaciones de calidad de datos en `validate.py`.
+El framework ejecuta estas validaciones **antes de guardar el output**.
+Si hay errores, el archivo de salida **no se escribe**.
+
+---
+
+## Archivos a implementar
+
+{% for job in jobs %}
+- `src/{{ job }}/validate.py`
+{% endfor %}
+
+---
+
+## Firma de la funcion
+
+```python
+def validate(df: pd.DataFrame) -> list[str]:
+    errors: list[str] = []
+    # ... validaciones ...
+    return errors
+```
+
+| | |
+|---|---|
+| **Entrada** | `df` — DataFrame con los datos procesados por `process()` |
+| **Regla** | Solo lectura — **no modificar** el DataFrame |
+| **Salida** | Lista de mensajes de error. Lista vacia = validacion exitosa |
+
+---
+
+## Dos niveles de severidad
+
+### `errors.append(mensaje)` — Bloquea el guardado
+
+Usar cuando el problema hace el dataset **inutil o incorrecto**.
+
+```python
+errors.append(f"Se esperaban al menos 10 registros, se obtuvieron {len(df)}.")
+errors.append(f"Campo 'Titulo' tiene {n} valores vacios.")
+errors.append(f"'Precio' tiene {n} valores no numericos tras el procesamiento.")
+```
+
+### `logger.warning(mensaje)` — Solo registra, no bloquea
+
+Usar cuando la anomalia es **aceptable** y no invalida el dataset.
+
+```python
+logger.warning(f"'Precio' tiene {n} valores <= 0 ({n/len(df)*100:.1f}%).")
+logger.warning(f"'Descripcion' tiene {n} valores vacios.")
+```
+
+**Criterio de decision:**
+
+| Situacion | Severidad recomendada |
+|---|---|
+| 0 registros o muy pocos | `errors.append` |
+| Campo clave (ID, titulo principal) vacio | `errors.append` |
+| Tipo de dato incorrecto tras process() | `errors.append` |
+| Duplicados que no deberian existir | `errors.append` |
+| Campo opcional vacio | `logger.warning` |
+| Valores fuera de rango (pueden ser reales) | `logger.warning` |
+| Porcentaje de nulos bajo en campo no clave | `logger.warning` |
+
+---
+
+## Cinco categorias de validacion
+
+Los archivos `validate.py` generados incluyen ejemplos comentados para cada categoria.
+
+### 1. Minimo de registros
+
+Un scraper que retorna muy pocos registros probablemente fue bloqueado
+o la estructura de la web cambio.
+
+```python
+MIN_REGISTROS = 10
+if len(df) < MIN_REGISTROS:
+    errors.append(
+        f"Se esperaban al menos {MIN_REGISTROS} registros, se obtuvieron {len(df)}."
+    )
+```
+
+### 2. Nulos / vacios en campos criticos
+
+```python
+CAMPOS_CRITICOS = ["Titulo", "ID"]
+for campo in CAMPOS_CRITICOS:
+    if campo in df.columns:
+        nulos = df[campo].isna() | (df[campo].astype(str).str.strip() == "")
+        n = int(nulos.sum())
+        if n > 0:
+            errors.append(f"Campo critico '{campo}' tiene {n} valor(es) nulo(s) o vacio(s).")
+
+CAMPOS_IMPORTANTES = ["Descripcion"]
+for campo in CAMPOS_IMPORTANTES:
+    if campo in df.columns:
+        n = int(df[campo].isna().sum())
+        if n > 0:
+            logger.warning(f"Campo '{campo}' tiene {n} valor(es) nulo(s) ({n/len(df)*100:.1f}%).")
+```
+
+### 3. Tipos de dato
+
+Verifica que `process()` convirtio correctamente los campos numericos.
+
+```python
+if "Precio" in df.columns:
+    no_numericos = pd.to_numeric(df["Precio"], errors="coerce").isna() & df["Precio"].notna()
+    n = int(no_numericos.sum())
+    if n > 0:
+        errors.append(f"'Precio' tiene {n} valor(es) no numericos tras el procesamiento.")
+```
+
+### 4. Rango de valores
+
+```python
+if "Precio" in df.columns:
+    precios = pd.to_numeric(df["Precio"], errors="coerce")
+    n = int((precios <= 0).sum())
+    if n > 0:
+        logger.warning(f"'Precio' tiene {n} valor(es) <= 0.")
+```
+
+### 5. Deduplicacion
+
+Red de seguridad: si `process()` ya aplico `drop_duplicates()`, este chequeo
+verifica que no queden duplicados. La **eliminacion** de duplicados va en `process.py`.
+
+```python
+CLAVE_UNICA = ["Titulo"]
+n = int(df.duplicated(subset=CLAVE_UNICA, keep=False).sum())
+if n > 0:
+    errors.append(f"Se encontraron {n} registro(s) duplicados por clave {CLAVE_UNICA}.")
+```
+
+---
+
+## Ejemplo completo
+
+```python
+import logging
+import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+
+def validate(df: pd.DataFrame) -> list[str]:
+    errors: list[str] = []
+
+    # 1. Minimo de registros
+    if len(df) < 10:
+        errors.append(f"Solo {len(df)} registros. Posible bloqueo o cambio en la web.")
+
+    # 2. Nulos en campo clave
+    if "Titulo" in df.columns:
+        nulos = df["Titulo"].isna() | (df["Titulo"].str.strip() == "")
+        if nulos.sum() > 0:
+            errors.append(f"'Titulo' tiene {int(nulos.sum())} valores vacios.")
+
+    # 3. Tipo de dato
+    if "Precio" in df.columns:
+        no_num = pd.to_numeric(df["Precio"], errors="coerce").isna() & df["Precio"].notna()
+        if no_num.sum() > 0:
+            errors.append(f"'Precio' tiene {int(no_num.sum())} valores no numericos.")
+
+    # 4. Rango
+    if "Precio" in df.columns:
+        precios = pd.to_numeric(df["Precio"], errors="coerce")
+        if (precios <= 0).sum() > 0:
+            logger.warning(f"'Precio' tiene {int((precios <= 0).sum())} valores <= 0.")
+
+    # 5. Duplicados
+    if "Titulo" in df.columns:
+        n = int(df.duplicated(subset=["Titulo"], keep=False).sum())
+        if n > 0:
+            errors.append(f"{n} registros duplicados por 'Titulo'.")
+
+    return errors
+```
+
+---
+
+## Historial de runs
+
+Cada ejecucion (exitosa o fallida) se registra automaticamente en `run_history/<job>.jsonl`:
+
+```json
+{"job": "{{ jobs[0] }}", "started_at": "2026-01-30T14:30:52", "mode": "scrape",
+ "status": "failed", "raw_suffix": null, "error": "Validacion fallida (1 error)...",
+ "duration_s": 8.1, "outputs": []}
+```
+
+Campos utiles para gobierno de datos:
+
+| Campo | Uso |
+|---|---|
+| `status` | Filtrar runs fallidos: `status == "failed"` |
+| `error` | Ver el mensaje de validacion que bloqueo el guardado |
+| `raw_suffix` | Si el fallo fue en validate (no en scrape), el raw existe y puede reprocesarse |
+| `duration_s` | Detectar runs anormalmente lentos o rapidos |
+
+**Reprocesar tras corregir validate.py:**
+
+```bash
+python -m src.main --job {{ jobs[0] }} --reprocess 20260130_143052
+```

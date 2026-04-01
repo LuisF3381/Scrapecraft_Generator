@@ -3,12 +3,17 @@ import importlib
 import logging
 import pandas as pd
 import yaml
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Cargar .env antes de importar cualquier settings.py (que lee os.environ)
+load_dotenv()
+
 from src.shared import job_runner
 from src.shared import logger as logger_module
-from src.shared.storage import save_data, load_output, clear_latest, copy_to_latest, merge_logs_to_latest
-from config import global_settings
+from src.shared.storage import save_data, load_output, clear_latest, copy_to_latest, merge_logs_to_latest, get_format_config
 
 # Logger del orquestador en namespace propio para que setup_logger() (que limpia "src")
 # no elimine su handler entre jobs de un pipeline.
@@ -78,8 +83,10 @@ def _make_args(job_name: str) -> argparse.Namespace:
 
 def _validate_consolidation(job_entries: list[dict], consolidate_config: dict) -> None:
     """
-    Valida antes de correr cualquier job que todos tengan el formato de
-    consolidacion en su output_formats. Falla rapido con mensaje claro.
+    Valida antes de correr cualquier job que:
+    1. Todos los jobs incluyen el formato de consolidacion en su output_formats.
+    2. Todos los jobs tienen la misma format_config para ese formato.
+    Falla rapido con mensaje claro.
     """
     fmt = consolidate_config.get("format")
     if not fmt:
@@ -95,12 +102,14 @@ def _validate_consolidation(job_entries: list[dict], consolidate_config: dict) -
         logger.error("consolidate.module es obligatorio cuando consolidate.enabled es true.")
         raise SystemExit(1)
 
+    fmt_configs: dict[str, dict] = {}
     for entry in job_entries:
         job_name = entry["name"]
         try:
             settings = importlib.import_module(f"src.{job_name}.settings")
         except ModuleNotFoundError:
             continue  # El error de job no encontrado se manejara al ejecutarlo
+
         output_formats = settings.STORAGE_CONFIG.get("output_formats", ["csv"])
         if fmt not in output_formats:
             logger.error(
@@ -110,38 +119,42 @@ def _validate_consolidation(job_entries: list[dict], consolidate_config: dict) -
             )
             raise SystemExit(1)
 
+        fmt_configs[job_name] = get_format_config(settings.STORAGE_CONFIG, fmt)
 
-def _run_consolidation(job_outputs: dict[str, Path], consolidate_config: dict) -> dict[str, Path]:
+    unique_configs = {str(sorted(c.items())) for c in fmt_configs.values()}
+    if len(unique_configs) > 1:
+        detail = "\n  ".join(f"{j}: {c}" for j, c in fmt_configs.items())
+        logger.error(
+            f"Consolidacion activada con format='{fmt}', pero los jobs tienen "
+            f"format_config distintas para ese formato:\n  {detail}\n"
+            f"Todos los jobs deben compartir la misma format_config para '{fmt}' "
+            f"en STORAGE_CONFIG['format_config'] de su settings.py."
+        )
+        raise SystemExit(1)
+
+
+def _run_consolidation(job_outputs: dict[str, Path], consolidate_config: dict, consolidator) -> dict[str, Path]:
     """
-    Carga el modulo consolidador, ejecuta consolidate() y guarda el resultado.
+    Ejecuta consolidate() con el modulo ya cargado y guarda el resultado.
 
     Args:
         job_outputs:        Mapa job_name -> Path del archivo generado (formato de consolidacion).
         consolidate_config: Bloque 'consolidate' del pipeline YAML.
+        consolidator:       Modulo consolidador ya importado por el caller.
 
     Returns:
         dict[str, Path]: Mapa formato -> ruta del archivo consolidado guardado.
     """
-    module_name = consolidate_config["module"]
     params = consolidate_config.get("params") or {}
 
-    try:
-        consolidator = importlib.import_module(f"src.consolidadores.{module_name}")
-    except ModuleNotFoundError:
-        logger.error(
-            f"Consolidador '{module_name}' no encontrado. "
-            f"Crea el modulo en src/consolidadores/{module_name}.py"
-        )
-        raise SystemExit(1)
-
-    logger.info(f"\nIniciando consolidacion: {module_name}")
+    logger.info(f"\nIniciando consolidacion: {consolidate_config['module']}")
     logger.info(f"Fuentes: {list(job_outputs.keys())}")
 
     consolidation_fmt = consolidate_config["format"]
-    job_dataframes = {
-        job_name: load_output(filepath, consolidation_fmt, global_settings.DATA_CONFIG)
-        for job_name, filepath in job_outputs.items()
-    }
+    job_dataframes: dict[str, pd.DataFrame] = {}
+    for job_name, filepath in job_outputs.items():
+        job_settings = importlib.import_module(f"src.{job_name}.settings")
+        job_dataframes[job_name] = load_output(filepath, consolidation_fmt, job_settings.STORAGE_CONFIG)
 
     result = consolidator.consolidate(job_dataframes, params)
 
@@ -165,10 +178,139 @@ def _run_consolidation(job_outputs: dict[str, Path], consolidate_config: dict) -
 
     paths: dict[str, Path] = {}
     for output_fmt in output_formats:
-        paths[output_fmt] = save_data(result, output_fmt, global_settings.DATA_CONFIG, storage_config, now)
+        paths[output_fmt] = save_data(result, output_fmt, storage_config, now)
 
     logger.info("Consolidacion finalizada")
     return paths
+
+
+# ---------------------------------------------------------------------------
+# Ejecucion de un job individual (serie o paralelo)
+# ---------------------------------------------------------------------------
+
+
+def _run_one_job(
+    entry: dict,
+    is_consolidated: bool,
+) -> tuple[str, dict[str, Path], Path | None, Exception | None]:
+    """
+    Ejecuta un job y retorna (job_name, output_paths, log_path, error).
+    Disenado para correr tanto en el hilo principal (serie) como en hilos
+    del ThreadPoolExecutor (paralelo).
+
+    En modo paralelo, cada hilo tiene su propio _local.log_path gracias al
+    _ThreadLocalFileHandler, por lo que los logs se escriben en archivos
+    separados sin interferencias entre jobs.
+
+    Returns:
+        job_name:     Nombre del job ejecutado.
+        output_paths: Mapa formato -> Path de los archivos generados ({} si fallo).
+        log_path:     Path del log del job (None si no se configuro logger).
+        error:        Excepcion capturada (None si exitoso).
+    """
+    job_name = entry["name"]
+    params = entry.get("params") or {}
+    try:
+        scrape_fn, process_fn, validate_fn, settings = _load_job_parts(job_name)
+        output_paths = job_runner.run(
+            _make_args(job_name), scrape_fn, process_fn, validate_fn, settings, job_name,
+            params=params,
+            update_latest=not is_consolidated,
+        )
+        log_path = logger_module.get_current_log_path()
+        if is_consolidated:
+            logger_module.flush_log()
+        return job_name, output_paths, log_path, None
+    except Exception as e:
+        log_path = logger_module.get_current_log_path()
+        if is_consolidated:
+            logger_module.flush_log()
+        return job_name, {}, log_path, e
+
+
+# ---------------------------------------------------------------------------
+# Ejecucion en paralelo
+# ---------------------------------------------------------------------------
+
+
+def _run_parallel(
+    job_entries: list[dict],
+    consolidate_config: dict | None = None,
+    pipeline_name: str | None = None,
+) -> None:
+    """
+    Ejecuta todos los jobs del pipeline de forma concurrente usando ThreadPoolExecutor.
+    Cada job corre en su propio hilo con logging aislado via _ThreadLocalFileHandler.
+
+    Si consolidate esta activo, espera a que TODOS los jobs terminen y luego
+    ejecuta la consolidacion en el hilo principal (serie).
+
+    Gestion de latest/:
+    - Sin consolidacion: cada job gestiona su propio latest/<job_name>/ de forma independiente.
+    - Con consolidacion: se gestiona un unico latest/<pipeline_name>/ con el output consolidado.
+    """
+    is_consolidated = bool(consolidate_config and consolidate_config.get("enabled"))
+
+    if is_consolidated:
+        _validate_consolidation(job_entries, consolidate_config)
+        pipeline_folder: str = pipeline_name or consolidate_config.get("module", "pipeline")
+        clear_latest(pipeline_folder)
+        collected_logs: list[Path] = []
+    else:
+        pipeline_folder = ""
+        collected_logs = []
+
+    total = len(job_entries)
+    failed: list[str] = []
+    job_outputs: dict[str, Path] = {}
+    consolidation_format: str = (consolidate_config or {}).get("format", "")
+
+    logger.info(f"Ejecutando {total} jobs en paralelo...")
+
+    with ThreadPoolExecutor(max_workers=total) as executor:
+        future_to_name = {
+            executor.submit(_run_one_job, entry, is_consolidated): entry["name"]
+            for entry in job_entries
+        }
+        for future in as_completed(future_to_name):
+            job_name_res, output_paths, log_path, error = future.result()
+
+            if error:
+                logger.error(f"[{job_name_res}] ERROR: {error}")
+                failed.append(job_name_res)
+            else:
+                logger.info(f"[{job_name_res}] Completado")
+                if consolidation_format and consolidation_format in output_paths:
+                    job_outputs[job_name_res] = output_paths[consolidation_format]
+
+            if is_consolidated and log_path and log_path not in collected_logs:
+                collected_logs.append(log_path)
+
+    logger.info(f"\n{'='*50}")
+    logger.info(f"Paralelo finalizado: {total - len(failed)}/{total} jobs exitosos")
+    if failed:
+        logger.warning(f"Jobs con error: {', '.join(failed)}")
+
+    if is_consolidated:
+        if failed:
+            logger.warning(
+                f"Consolidacion omitida: {len(failed)} job(s) fallaron "
+                f"({', '.join(failed)}). Todos los jobs deben ser exitosos."
+            )
+            merge_logs_to_latest(pipeline_folder, collected_logs)
+        else:
+            consolidator = importlib.import_module(f"src.consolidadores.{consolidate_config['module']}")
+            base_filename = consolidator.STORAGE_CONFIG.get("filename")
+            consolidation_paths: dict[str, Path] = {}
+            try:
+                consolidation_paths = _run_consolidation(job_outputs, consolidate_config, consolidator)
+            except SystemExit:
+                raise
+            except Exception as e:
+                logger.error(f"ERROR en consolidacion: {e}")
+            finally:
+                copy_to_latest(pipeline_folder, consolidation_paths, None, base_filename)
+                merge_logs_to_latest(pipeline_folder, collected_logs)
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +325,7 @@ def _run_series(job_entries: list[dict], consolidate_config: dict | None = None,
     Si un job falla, registra el error y continua con el siguiente.
     Si consolidate_config esta activo y todos los jobs fueron exitosos, ejecuta la consolidacion.
 
-    Gestion de latest/):
+    Gestion de latest/:
     - Sin consolidacion: cada job gestiona su propio latest/<job_name>/ de forma independiente.
     - Con consolidacion: se gestiona un unico latest/<pipeline_name>/ con el output consolidado
       y los logs de todos los jobs concatenados. Los jobs individuales no escriben en latest/.
@@ -200,34 +342,26 @@ def _run_series(job_entries: list[dict], consolidate_config: dict | None = None,
         collected_logs = []
 
     total = len(job_entries)
-    failed = []
+    failed: list[str] = []
     job_outputs: dict[str, Path] = {}
     consolidation_format: str = (consolidate_config or {}).get("format", "")
 
     for i, entry in enumerate(job_entries, start=1):
-        job_name = entry["name"]
-        params   = entry.get("params") or {}
-        logger.info(f"\n[{i}/{total}] Iniciando job: {job_name}")
+        logger.info(f"\n[{i}/{total}] Iniciando job: {entry['name']}")
 
-        try:
-            scrape_fn, process_fn, validate_fn, settings = _load_job_parts(job_name)
-            output_paths = job_runner.run(
-                _make_args(job_name), scrape_fn, process_fn, validate_fn, settings, job_name,
-                params=params,
-                update_latest=not is_consolidated,
-            )
+        job_name_res, output_paths, log_path, error = _run_one_job(entry, is_consolidated)
+
+        if error:
+            if isinstance(error, SystemExit):
+                raise error
+            logger.error(f"[{i}/{total}] ERROR en '{job_name_res}': {error}")
+            failed.append(job_name_res)
+        else:
             if consolidation_format and consolidation_format in output_paths:
-                job_outputs[job_name] = output_paths[consolidation_format]
-        except SystemExit:
-            raise
-        except Exception as e:
-            logger.error(f"[{i}/{total}] ERROR en '{job_name}': {e}")
-            failed.append(job_name)
-        finally:
-            if is_consolidated:
-                logger_module.flush_log()
-                if logger_module.current_log_path and logger_module.current_log_path not in collected_logs:
-                    collected_logs.append(logger_module.current_log_path)
+                job_outputs[job_name_res] = output_paths[consolidation_format]
+
+        if is_consolidated and log_path and log_path not in collected_logs:
+            collected_logs.append(log_path)
 
     logger.info(f"\n{'='*50}")
     logger.info(f"Serie finalizada: {total - len(failed)}/{total} jobs exitosos")
@@ -246,7 +380,7 @@ def _run_series(job_entries: list[dict], consolidate_config: dict | None = None,
             base_filename = consolidator.STORAGE_CONFIG.get("filename")
             consolidation_paths: dict[str, Path] = {}
             try:
-                consolidation_paths = _run_consolidation(job_outputs, consolidate_config)
+                consolidation_paths = _run_consolidation(job_outputs, consolidate_config, consolidator)
             except SystemExit:
                 raise
             except Exception as e:
@@ -261,22 +395,22 @@ def _run_series(job_entries: list[dict], consolidate_config: dict | None = None,
 # ---------------------------------------------------------------------------
 
 
-def _load_pipeline(path: str) -> tuple[list[dict], dict | None, str | None]:
+def _load_pipeline(path: str) -> tuple[list[dict], dict | None, str | None, bool]:
     """
-    Carga un pipeline YAML y retorna la lista de entradas de jobs y la
-    configuracion de consolidacion (o None si no esta definida).
+    Carga un pipeline YAML y retorna la lista de entradas de jobs, la
+    configuracion de consolidacion (o None) y el flag de ejecucion paralela.
 
     Formato esperado:
         name: mi_pipeline           # opcional
         description: "..."          # opcional
+        parallel: true              # opcional (default: false)
 
         jobs:
-          - name: books_to_scrape
+          - name: mi_job
             params:                 # opcional, dict nativo YAML
               categoria: mystery
               pagina: 1
             enabled: false          # opcional, omitir o poner true para ejecutar
-          - name: viviendas_adonde
 
         consolidate:                # opcional
           enabled: true
@@ -316,7 +450,8 @@ def _load_pipeline(path: str) -> tuple[list[dict], dict | None, str | None]:
         })
 
     consolidate_config = data.get("consolidate") or None
-    return entries, consolidate_config, pipeline_name
+    parallel: bool = bool(data.get("parallel", False))
+    return entries, consolidate_config, pipeline_name, parallel
 
 
 def main() -> None:
@@ -329,12 +464,12 @@ def main() -> None:
     mode_group.add_argument(
         "--job",
         metavar="JOB",
-        help="Ejecutar un job individual (ej: books_to_scrape)"
+        help="Ejecutar un job individual (ej: mi_job)"
     )
     mode_group.add_argument(
         "--pipeline",
         metavar="YAML",
-        help="Ejecutar un pipeline definido en un archivo YAML (ej: config/pipelines/diario.yaml)"
+        help="Ejecutar un pipeline definido en un archivo YAML (ej: config/pipelines/pipeline.yaml)"
     )
 
     # --- Opciones exclusivas de --job ---
@@ -375,9 +510,13 @@ def main() -> None:
         job_runner.run(args, scrape_fn, process_fn, validate_fn, settings, args.job)
 
     elif args.pipeline:
-        entries, consolidate_config, pipeline_name = _load_pipeline(args.pipeline)
-        logger.info(f"Pipeline '{args.pipeline}': {len(entries)} job(s)")
-        _run_series(entries, consolidate_config, pipeline_name)
+        entries, consolidate_config, pipeline_name, parallel = _load_pipeline(args.pipeline)
+        mode = "paralelo" if parallel else "serie"
+        logger.info(f"Pipeline '{args.pipeline}': {len(entries)} job(s) [{mode}]")
+        if parallel:
+            _run_parallel(entries, consolidate_config, pipeline_name)
+        else:
+            _run_series(entries, consolidate_config, pipeline_name)
 
     else:
         parser.error("Especifica un modo de ejecucion: --job o --pipeline. Usa --list para ver los jobs disponibles.")

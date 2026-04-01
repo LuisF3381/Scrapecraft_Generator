@@ -290,18 +290,21 @@ def _print_success(project_root: Path, config: dict) -> None:
     print(f"       cd \"{project_root}\"")
     print("       pip install -r requirements.txt")
     print()
-    print("  2. Configurar cada job:")
-    for job in config["jobs"]:
-        print(f"       src/{job}/web_config.yaml  -- URL y selectores XPath")
-        print(f"       src/{job}/scraper.py       -- logica de navegacion y extraccion")
-        print(f"       src/{job}/utils.py         -- parse_record() campo a campo")
-        print(f"       src/{job}/process.py       -- transformaciones y tipado")
+    print("  2. Copiar variables de entorno:")
+    print("       cp .env.example .env")
     print()
-    print("  3. Ejecutar:")
+    print("  3. Verificar la configuracion:")
+    print("       python -m pytest tests/ -v")
+    print()
+    print("  4. Ejecutar:")
     print(f"       python -m src.main --job {config['jobs'][0]}")
     if config["serial"]:
         pipeline = "pipeline_consolidado.yaml" if config["consolidado"] else "pipeline.yaml"
         print(f"       python -m src.main --pipeline config/pipelines/{pipeline}")
+    print()
+    print("  Manuales de referencia generados en el proyecto:")
+    print("    MANUAL_DATA_ENGINEER.md  — guia para implementar scraper, process y settings")
+    print("    MANUAL_GOBERNANZA.md     — guia para implementar validate.py")
     print(SEP)
     print()
 

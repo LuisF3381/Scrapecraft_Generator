@@ -2,10 +2,13 @@
 Configuracion global de ScrapeCraft.
 Aplica a todos los procesos independientemente del job que se ejecute.
 """
+import os
+
 # =========================================================================
 # ZONA DATA ENGINEER — modificar en casos excepcionales
-# (encoding, separadores CSV, estructura XML, nivel de log, etc.)
-# Los ajustes especificos de cada job van en src/<job>/settings.py
+# (nivel de log, carpeta de logs)
+# La configuracion de formatos (encoding, separadores, etc.) va en
+# STORAGE_CONFIG["format_config"] de cada src/<job>/settings.py
 # =========================================================================
 
 # ============================================
@@ -17,38 +20,6 @@ LOG_CONFIG = {
     "log_folder": "log",
 
     # Nivel de logging: DEBUG, INFO, WARNING, ERROR
-    "level": "INFO"
-}
-
-# ============================================
-# CONFIGURACIÓN DE DATOS (formatos de exportación)
-# ============================================
-
-DATA_CONFIG = {
-    # Configuración para CSV
-    "csv": {
-        "encoding": "utf-8",
-        "separator": ";",
-        "index": False
-    },
-
-    # Configuración para JSON
-    "json": {
-        "indent": 2,
-        "force_ascii": False,
-        "orient": "records"
-    },
-
-    # Configuración para XML
-    "xml": {
-        "root": "registros",
-        "row": "registro",
-        "encoding": "utf-8"
-    },
-
-    # Configuración para Excel
-    "xlsx": {
-        "sheet_name": "Datos",
-        "index": False
-    }
+    # Se puede sobreescribir con la variable de entorno LOG_LEVEL en .env
+    "level": os.environ.get("LOG_LEVEL", "INFO")
 }

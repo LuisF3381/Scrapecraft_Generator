@@ -1,7 +1,9 @@
 """
 Configuracion especifica del job {{ job_name }}.
-Para configuracion global (logs, formatos de datos) ver config/global_settings.py
+Para configuracion global (logs) ver config/global_settings.py
 """
+import os
+
 # =========================================================================
 # ZONA DATA ENGINEER — configurar todos los bloques de este archivo
 # =========================================================================
@@ -25,10 +27,12 @@ DRIVER_CONFIG = {
     "window_size": None,
 
     # User agent personalizado. None usa el del navegador por defecto.
-    "user_agent": None,
+    # Se puede definir en .env como SCRAPER_USER_AGENT
+    "user_agent": os.environ.get("SCRAPER_USER_AGENT") or None,
 
     # Proxy en formato "ip:puerto". None sin proxy.
-    "proxy": None
+    # Se puede definir en .env como SCRAPER_PROXY
+    "proxy": os.environ.get("SCRAPER_PROXY") or None,
 }
 
 # ============================================
@@ -36,6 +40,8 @@ DRIVER_CONFIG = {
 # ============================================
 
 STORAGE_CONFIG = {
+    # --- Output ---
+
     # Carpeta de salida (relativa a la raiz del proyecto)
     "output_folder": "output/{{ job_name }}",
 
@@ -51,37 +57,44 @@ STORAGE_CONFIG = {
 
     # Formatos de salida: lista de formatos a exportar
     # Opciones disponibles: "csv", "json", "xml", "xlsx"
-    "output_formats": ["csv", "json"]
+    # Nota: el primer formato tambien se usa para guardar el raw
+    "output_formats": ["csv", "json"],
+
+    # --- Raw ---
+
+    # Carpeta donde se guardan los archivos raw (datos en bruto pre-procesamiento)
+    "raw_folder": "raw/{{ job_name }}",
+
+    # Politica de retencion de archivos raw:
+    # - "keep_all":    Conserva todos los archivos
+    # - "keep_last_n": Conserva los ultimos N archivos
+    # - "keep_days":   Conserva los archivos de los ultimos N dias
+    "retention": {
+        "mode": "keep_last_n",
+        "value": 5
+    },
+
+    # --- Configuracion de formatos ---
+
+    # Opciones de escritura/lectura para cada formato usado por este job.
+    # Define al menos los formatos declarados en output_formats.
+    "format_config": {
+        "csv": {
+            "encoding": "utf-8",
+            "separator": ";",
+            "index": False
+        },
+        "json": {
+            "indent": 2,
+            "force_ascii": False,
+            "orient": "records"
+        }
+    }
 }
 
 # ============================================
 # CONFIGURACION DEL PIPELINE
 # ============================================
 
-# Si es True, omite process.py y guarda el raw directamente como output final.
-# Util para casos donde los datos no necesitan transformacion.
+# Si es True, omite el paso de process.py y guarda el raw directamente.
 SKIP_PROCESS = False
-
-# ============================================
-# CONFIGURACION DE RAW (datos en bruto)
-# ============================================
-
-RAW_CONFIG = {
-    # Carpeta donde se guardan los archivos raw (relativa a la raiz del proyecto)
-    "raw_folder": "raw/{{ job_name }}",
-
-    # Nombre base del archivo raw (sin extension ni sufijo timestamp)
-    "filename": "{{ job_name }}",
-
-    # Formato del archivo raw: csv | json | xml | xlsx
-    "format": "csv",
-
-    # Politica de retencion de archivos raw:
-    # - "keep_all":    Conserva todos los archivos raw
-    # - "keep_last_n": Conserva los ultimos N archivos (requiere "value": N)
-    # - "keep_days":   Conserva los archivos de los ultimos N dias (requiere "value": N)
-    "retention": {
-        "mode": "keep_last_n",
-        "value": 5
-    }
-}

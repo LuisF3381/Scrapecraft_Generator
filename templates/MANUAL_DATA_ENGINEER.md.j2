@@ -1,0 +1,245 @@
+# Manual — Data Engineer
+
+Proyecto: **{{ project_name }}**
+Jobs: {% for job in jobs %}**{{ job }}**{% if not loop.last %}, {% endif %}{% endfor %}
+
+Este manual describe los archivos que el Data Engineer debe implementar en cada job.
+El framework gestiona el resto: I/O, logs, retención de raws, pipelines y latest/.
+
+---
+
+## Flujo ETL
+
+```
+scrape() → save_raw → process() → validate() → save_output
+```
+
+| Etapa | Archivo | Responsable |
+|---|---|---|
+| Extraccion | `src/<job>/scraper.py` | Data Engineer |
+| Extraccion | `src/<job>/utils.py` | Data Engineer |
+| Transformacion | `src/<job>/process.py` | Data Engineer |
+| Configuracion | `src/<job>/settings.py` | Data Engineer |
+| Configuracion web | `src/<job>/web_config.yaml` | Data Engineer |
+| Validacion | `src/<job>/validate.py` | Gobierno de Datos |
+
+---
+
+## Archivos a implementar
+
+### 1. `src/<job>/web_config.yaml` — URL y selectores
+
+```yaml
+url: "https://ejemplo.com/productos"
+
+selectors:
+  container: '//ul[@class="lista"]/li'  # XPath del elemento raiz de cada item
+  Campo1:    './/h2/text()'              # XPath relativo al container
+  Campo2:    './/span[@class="precio"]'  # XPath relativo al container
+
+waits:
+  reconnect_attempts: 3   # intentos de reconexion ante timeout
+  after_load: 2           # segundos de espera tras cargar la pagina
+```
+
+> `container` es obligatorio. El resto de selectores son los campos que quieres extraer.
+
+---
+
+### 2. `src/<job>/scraper.py` — Logica de navegacion
+
+```python
+def scrape(driver, web_config: dict, params: dict) -> list[dict]:
+    url       = web_config["url"]
+    selectors = web_config["selectors"]
+    waits     = web_config["waits"]
+
+    driver.get(url)
+    driver.sleep(waits["after_load"])
+
+    items = driver.find_elements("xpath", selectors["container"])
+
+    datos = []
+    for i, item in enumerate(items, start=1):
+        datos.append(parse_record(item, selectors, i))
+
+    return datos
+```
+
+**Patrones utiles con SeleniumBase:**
+
+```python
+driver.get(url)                                  # navegar
+driver.sleep(segundos)                           # esperar
+driver.find_elements("xpath", selector)          # lista de elementos
+driver.find_element("xpath", selector)           # un elemento
+driver.wait_for_element(selector, timeout=10)    # esperar a que aparezca
+driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")  # scroll
+```
+
+---
+
+### 3. `src/<job>/utils.py` — `parse_record()` campo a campo
+
+```python
+from src.shared.utils import safe_get_text, safe_get_attr
+
+def parse_record(item, selectors: dict, index: int) -> dict:
+    return {
+        "Numero": index,
+        "Campo1": safe_get_text(item, selectors["Campo1"]),
+        "Campo2": safe_get_text(item, selectors["Campo2"]),
+        "Enlace": safe_get_attr(item, selectors["Campo2"], "href"),
+    }
+```
+
+- `safe_get_text(item, xpath)` — extrae texto; retorna `""` si no encuentra el elemento.
+- `safe_get_attr(item, xpath, attr)` — extrae un atributo HTML; retorna `""` si falla.
+- Los datos llegan en bruto (string). `process.py` se encarga de limpiar y tipar.
+
+---
+
+### 4. `src/<job>/process.py` — Transformacion del raw
+
+```python
+def process(df: pd.DataFrame) -> list[dict]:
+    df = df.copy()
+
+    # Limpiar
+    df["Campo1"] = df["Campo1"].str.strip()
+
+    # Tipar
+    df["Precio"] = pd.to_numeric(df["Precio"].str.replace(",", "."), errors="coerce")
+
+    # Deduplicar (la verificacion de integridad va en validate.py)
+    df = df.drop_duplicates(subset=["Campo1"])
+
+    return df.to_dict(orient="records")
+```
+
+> El DataFrame llega con **todas las columnas como string** (normalizacion string-first del raw).
+> `process.py` transforma y tipa. `validate.py` solo verifica, nunca modifica.
+
+---
+
+### 5. `src/<job>/settings.py` — Configuracion del job
+
+#### STORAGE_CONFIG
+
+| Clave | Descripcion | Ejemplo |
+|---|---|---|
+| `output_folder` | Carpeta de salida | `"output/{{ jobs[0] }}"` |
+| `filename` | Nombre base del archivo | `"{{ jobs[0] }}"` |
+| `naming_mode` | Como se nombra el archivo | `"date_suffix"` |
+| `output_formats` | Formatos a exportar | `["csv", "json"]` |
+| `raw_folder` | Carpeta del raw | `"raw/{{ jobs[0] }}"` |
+| `retention` | Politica de retencion del raw | ver abajo |
+| `format_config` | Opciones de escritura por formato | ver abajo |
+
+**naming_mode:**
+- `overwrite` — sobrescribe el archivo en cada run (`datos.csv`)
+- `date_suffix` — un archivo por dia (`datos_20260130.csv`)
+- `timestamp_suffix` — un archivo por run (`datos_20260130_143052.csv`)
+- `date_folder` — organiza por fecha (`20260130/datos.csv`)
+
+**retention:**
+```python
+{"mode": "keep_all"}            # conserva todos los raws
+{"mode": "keep_last_n", "value": 5}   # conserva los 5 mas recientes
+{"mode": "keep_days",   "value": 30}  # conserva los de los ultimos 30 dias
+```
+
+**format_config** (opciones de escritura/lectura por formato):
+```python
+"format_config": {
+    "csv":  {"encoding": "utf-8", "separator": ";", "index": False},
+    "json": {"indent": 2, "force_ascii": False, "orient": "records"},
+}
+```
+
+#### DRIVER_CONFIG
+
+| Clave | Descripcion |
+|---|---|
+| `headless` | `False` en desarrollo, `True` en produccion/servidores |
+| `undetected` | `True` para sitios con Cloudflare / anti-bot |
+| `user_agent` | `os.environ.get("SCRAPER_USER_AGENT") or None` |
+| `proxy` | `os.environ.get("SCRAPER_PROXY") or None` |
+
+---
+{% if consolidado %}
+
+### 6. `src/consolidadores/consolidador.py` — Combinar jobs
+
+```python
+def consolidate(job_dataframes: dict, params: dict) -> list[dict]:
+    # DataFrames disponibles:
+{% for job in jobs %}
+    # job_dataframes["{{ job }}"]  ← output del job {{ job }}
+{% endfor %}
+
+    # Ejemplo: concatenar con columna de origen
+    import pandas as pd
+    frames = []
+    for job_name, df in job_dataframes.items():
+        df = df.copy()
+        df["_fuente"] = job_name
+        frames.append(df)
+    resultado = pd.concat(frames, ignore_index=True)
+    return resultado.to_dict(orient="records")
+```
+
+---
+{% endif %}
+
+## Variables de entorno (`.env`)
+
+Copia `.env.example` como `.env` y completa los valores:
+
+```bash
+cp .env.example .env
+```
+
+| Variable | Descripcion |
+|---|---|
+| `LOG_LEVEL` | Nivel de log: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `SCRAPER_PROXY` | Proxy en formato `ip:puerto` (vacio = sin proxy) |
+| `SCRAPER_USER_AGENT` | User-Agent del browser (vacio = por defecto) |
+
+---
+
+## Comandos utiles
+
+```bash
+# Ejecutar un job individual
+python -m src.main --job {{ jobs[0] }}
+
+# Reprocesar un raw existente sin volver a scraper
+python -m src.main --job {{ jobs[0] }} --reprocess 20260130_143052
+
+# Listar jobs disponibles
+python -m src.main --list
+{% if serial %}
+
+# Ejecutar el pipeline completo
+python -m src.main --pipeline config/pipelines/{{ "pipeline_consolidado.yaml" if consolidado else "pipeline.yaml" }}
+{% endif %}
+
+# Correr los tests de configuracion
+python -m pytest tests/ -v
+```
+
+---
+
+## Historial de runs
+
+Cada ejecucion se registra en `run_history/<job>.jsonl`:
+
+```json
+{"job": "{{ jobs[0] }}", "started_at": "2026-01-30T14:30:52", "mode": "scrape",
+ "status": "success", "raw_suffix": "20260130_143052", "duration_s": 12.3,
+ "outputs": ["output/{{ jobs[0] }}/{{ jobs[0] }}_20260130.csv"]}
+```
+
+Si un job falla antes de generar el raw, `raw_suffix` es `null`.
+Usa el `raw_suffix` de una ejecucion fallida para reprocesar sin volver a scraper.
